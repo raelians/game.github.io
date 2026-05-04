@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8" />
+    <title>Advanced Swipe Brick Breaker</title>
+    <style>
+        body { background: #121212; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        canvas { background: #1a1a1a; border-radius: 8px; box-shadow: 0 0 30px rgba(0,0,0,0.5); cursor: crosshair; touch-action: none; }
+        
+        /* 버튼 컨테이너 상단 우측 배치 */
+        .controls { 
+            position: absolute; top: 20px; right: 20px; z-index: 10; 
+            display: flex; flex-direction: column; gap: 10px;
+        }
+        button { 
+            background: #444; color: white; border: 2px solid #666; 
+            padding: 8px 15px; border-radius: 10px; font-weight: bold; 
+            cursor: pointer; transition: 0.2s; font-family: 'Segoe UI';
+        }
+        button:hover { background: #666; transform: scale(1.05); }
+        .btn-reset { background: #d32f2f; border-color: #ff5252; }
+        .btn-reset:hover { background: #ff5252; }
+        .btn-collect { background: #388e3c; border-color: #66bb6a; }
+        .btn-collect:hover { background: #66bb6a; }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <button class="btn-collect" onclick="gameManager.downBalls()">공 즉시 회수</button>
+        <button class="btn-reset" onclick="location.reload()">게임 재시작</button>
+    </div>
+    <canvas id="canvas"></canvas>
+
+<script>
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+    const delay = (n) => new Promise((r) => setTimeout(r, n));
+
+    class Vector {
+        constructor(x = 0, y = 0) { this.x = x; this.y = y; }
+        add(v) { this.x += v.x; this.y += v.y; return this; }
+        mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+        div(n) { this.x /= n; this.y /= n; return this; }
+        copy() { return new Vector(this.x, this.y); }
+    }
+
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const width = 480; 
+    const height = 720;
+    const uiOffset = 80;
+    canvas.width = width; canvas.height = height;
+
+    const Mouse = { pos: new Vector(width / 2, 0), isPressed: false };
+
+    class Ball {
+        constructor(x, y) {
+            this.pos = new Vector(x, y);
+            this.vel = new Vector(0, 0);
+            this.r = 6;
+            this.active = false;
+        }
+        shoot(targetPos) {
+            const angle = Math.atan2(targetPos.y - this.pos.y, targetPos.x - this.pos.x);
+            const speed = 12;
+            this.vel = new Vector(Math.cos(angle) * speed, Math.sin(angle) * speed);
+            this.active = true;
+        }
+        update() {
+            if (!this.active) return;
+            this.pos.add(this.vel);
+            if (this.pos.x < this.r || this.pos.x > width - this.r) { this.vel.x *= -1; this.pos.x = clamp(this.pos.x, this.r, width - this.r); }
+            if (this.pos.y < uiOffset + this.r) { this.vel.y *= -1; this.pos.y = uiOffset + this.r; }
+            if (this.pos.y > height - uiOffset) { this.stop(); }
+        }
+        stop() { this.vel = new Vector(0, 0); this.pos.y = height - uiOffset; this.active = false; }
+        draw() {
+            ctx.beginPath(); ctx.arc(this.pos.x, this.pos.y, this.r, 0, Math.PI * 2);
+            ctx.fillStyle = "#fff"; ctx.fill();
+        }
+    }
+
+    class Brick {
+        constructor(hp, col, row, level) {
+            this.hp = hp; this.w = (width / 6) - 4; this.h = 40;
+            this.pos = new Vector(col * (this.w + 4) + 2, row * (this.h + 4) + uiOffset + 4);
+            this.targetY = this.pos.y;
+            this.hue = (level * 25) % 360;
+        }
+        update() { if (this.pos.y < this.targetY) this.pos.y += 4; }
+        draw() {
+            ctx.fillStyle = `hsl(${this.hue}, 70%, 50%)`;
+            ctx.beginPath(); ctx.roundRect(this.pos.x, this.pos.y, this.w, this.h, 5); ctx.fill();
+            ctx.fillStyle = "white"; ctx.font = "bold 16px Arial"; ctx.textAlign = "center";
+            ctx.fillText(this.hp, this.pos.x + this.w/2, this.pos.y + this.h/2 + 6);
+        }
+        collide(ball) {
+            const cX = clamp(ball.pos.x, this.pos.x, this.pos.x + this.w);
+            const cY = clamp(ball.pos.y, this.pos.y, this.pos.y + this.h);
+            const dist = new Vector(ball.pos.x - cX, ball.pos.y - cY).mag();
+            if (dist < ball.r) {
+                if (cX === this.pos.x || cX === this.pos.x + this.w) ball.vel.x *= -1;
+                else ball.vel.y *= -1;
+                this.hp--; return true;
+            }
+            return false;
+        }
+    }
+
+    class BonusBall {
+        constructor(col, row) {
+            this.pos = new Vector(col * (width/6) + (width/12), row * 44 + uiOffset + 22);
+            this.targetY = this.pos.y; this.r = 10; this.collected = false;
+        }
+        update() { if (this.pos.y < this.targetY) this.pos.y += 4; }
+        draw() {
+            if (this.collected) return;
+            ctx.beginPath(); ctx.arc(this.pos.x, this.pos.y, this.r, 0, Math.PI * 2);
+            ctx.strokeStyle = "#3dd462"; ctx.lineWidth = 2; ctx.stroke();
+            ctx.beginPath(); ctx.arc(this.pos.x, this.pos.y, 5, 0, Math.PI * 2);
+            ctx.fillStyle = "#3dd462"; ctx.fill();
+        }
+    }
+
+    class GameManager {
+        constructor() {
+            this.balls = []; this.bricks = []; this.bonuses = [];
+            this.level = 1; this.ballPos = new Vector(width / 2, height - uiOffset);
+            this.isShooting = false; this.totalBalls = 1; this.pendingBalls = 0;
+            this.gameOver = false;
+            this.initLevel(); this.addBall(1); this.loop();
+        }
+        addBall(n) { for(let i=0; i<n; i++) this.balls.push(new Ball(this.ballPos.x, this.ballPos.y)); }
+        initLevel() {
+            // 1. 기존 기물들 한 칸씩 아래로 이동
+            this.bricks.forEach(b => b.targetY += 44);
+            this.bonuses.forEach(b => b.targetY += 44);
+
+            // 2. 새로운 줄 생성 (벽돌과 아이템 배치)
+            let itemSpawned = false; // 한 줄에 아이템은 최소 하나 정도 나오게 유도
+            for (let i = 0; i < 6; i++) {
+                const rand = Math.random();
+                
+                // 벽돌 생성 (약 35% 확률)
+                if (rand < 0.35) {
+                    this.bricks.push(new Brick(this.level, i, 0, this.level));
+                } 
+                // 아이템 생성 (벽돌이 없는 자리에 약 15% 확률로 생성하거나, 마지막 칸까지 안 나왔으면 생성)
+                else if ((rand < 0.5 && !itemSpawned) || (i === 5 && !itemSpawned && this.bricks.length < 5)) {
+                    this.bonuses.push(new BonusBall(i, 0));
+                    itemSpawned = true;
+                }
+            }
+
+            // 3. 게임 오버 체크 (벽돌이 바닥에 닿으면)
+            if (this.bricks.some(b => b.targetY > height - uiOffset - 45)) {
+                this.gameOver = true;
+            }
+        }
+        async shoot() {
+            if (this.isShooting || Mouse.pos.y > height - uiOffset) return;
+            this.isShooting = true;
+            for (const ball of this.balls) {
+                if (!this.isShooting) break; 
+                ball.shoot(Mouse.pos); await delay(60);
+            }
+        }
+        downBalls() {
+            if (!this.isShooting) return;
+            this.isShooting = false;
+            this.balls.forEach(b => { b.active = false; b.pos = this.ballPos.copy(); });
+            this.finishTurn();
+        }
+        finishTurn() {
+            this.level++;
+            this.totalBalls += this.pendingBalls;
+            this.addBall(this.pendingBalls);
+            this.pendingBalls = 0;
+            this.initLevel();
+        }
+        update() {
+            if (this.gameOver) return;
+            this.balls.forEach(ball => {
+                ball.update();
+                this.bricks.forEach((brick, index) => { if (brick.collide(ball)) { if (brick.hp <= 0) this.bricks.splice(index, 1); } });
+                this.bonuses.forEach((bonus, index) => {
+                    if (!bonus.collected && new Vector(ball.pos.x - bonus.pos.x, ball.pos.y - bonus.pos.y).mag() < bonus.r + ball.r) {
+                        bonus.collected = true; this.pendingBalls++;
+                    }
+                });
+            });
+            if (this.isShooting && this.balls.every(b => !b.active)) {
+                this.isShooting = false;
+                this.ballPos.x = this.balls[0].pos.x;
+                this.balls.forEach(b => b.pos.x = this.ballPos.x);
+                this.finishTurn();
+            }
+            this.bricks.forEach(b => b.update());
+            this.bonuses.forEach(b => b.update());
+        }
+        draw() {
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = "#222"; ctx.fillRect(0, 0, width, uiOffset); ctx.fillRect(0, height - uiOffset, width, uiOffset);
+            ctx.fillStyle = "#fff"; ctx.font = "20px Arial"; ctx.textAlign = "left"; ctx.fillText(`STAGE: ${this.level}`, 20, 45);
+            ctx.textAlign = "right"; ctx.fillText(`BALLS: ${this.totalBalls}`, width - 150, 45); // 버튼 자리 확보
+
+            if (Mouse.isPressed && !this.isShooting) {
+                ctx.beginPath(); ctx.setLineDash([5, 10]); ctx.moveTo(this.ballPos.x, this.ballPos.y);
+                ctx.lineTo(Mouse.pos.x, Mouse.pos.y); ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.stroke(); ctx.setLineDash([]);
+            }
+            this.bonuses.forEach(b => b.draw());
+            this.bricks.forEach(b => b.draw());
+            this.balls.forEach(b => b.draw());
+            if (this.gameOver) {
+                ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.fillRect(0, 0, width, height);
+                ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.font = "bold 40px Arial"; ctx.fillText("GAME OVER", width/2, height/2);
+            }
+        }
+        loop() { this.update(); this.draw(); requestAnimationFrame(() => this.loop()); }
+    }
+
+    const gameManager = new GameManager();
+    canvas.addEventListener("mousedown", (e) => { if (gameManager.gameOver) return; Mouse.isPressed = true; });
+    window.addEventListener("mouseup", () => { if (Mouse.isPressed) gameManager.shoot(); Mouse.isPressed = false; });
+    canvas.addEventListener("mousemove", (e) => {
+        const rect = canvas.getBoundingClientRect();
+        Mouse.pos.x = (e.clientX - rect.left) * (width / rect.width);
+        Mouse.pos.y = (e.clientY - rect.top) * (height / rect.height);
+    });
+</script>
+</body>
+</html>

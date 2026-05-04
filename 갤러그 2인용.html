@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>JS Galaga: Dual Score Edition</title>
+    <style>
+        body { background: #050505; color: #fff; font-family: 'Courier New', Courier, monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; overflow: hidden; }
+        canvas { border: 4px solid #333; background: #000; box-shadow: 0 0 40px rgba(0, 212, 255, 0.1); }
+        .info { margin-bottom: 10px; text-align: center; width: 750px; display: flex; justify-content: space-between; align-items: center; height: 40px; }
+        #status { font-size: 1.2em; font-weight: bold; color: #00D4FF; margin: 0; }
+        .score-box { font-size: 1.2em; display: flex; gap: 20px; visibility: hidden; }
+        .p1-score { color: #00D4FF; }
+        .p2-score { color: #00FF41; }
+        .controls { margin-top: 10px; font-size: 0.85em; color: #aaa; text-align: center; }
+        .danger { color: #FF3E3E !important; animation: blink 0.5s infinite; }
+        @keyframes blink { 50% { opacity: 0.3; } }
+    </style>
+</head>
+<body>
+    <div class="info">
+        <h2 id="status">CHOOSE MODE & DIFFICULTY</h2>
+        <div id="scoreBox" class="score-box">
+            <div class="p1-score">P1: <span id="p1Score">0</span></div>
+            <div id="p2Ui" class="p2-score">P2: <span id="p2Score">0</span></div>
+        </div>
+    </div>
+    <canvas id="gameCanvas" width="750" height="700"></canvas>
+    <div id="controlInfo" class="controls">Select Mode [1/2] -> Difficulty [1/2/3]</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const p1ScoreEl = document.getElementById('p1Score');
+const p2ScoreEl = document.getElementById('p2Score');
+const p2Ui = document.getElementById('p2Ui');
+const statusEl = document.getElementById('status');
+const scoreBox = document.getElementById('scoreBox');
+const controlInfo = document.getElementById('controlInfo');
+
+let stage = 'MODE_SELECT'; 
+let gameMode = 1; 
+let difficulty = 'Normal'; 
+let diffSettings = { spawnRate: 0.03, speedMult: 1, bossHP: 15 };
+
+let p1Score = 0, p2Score = 0;
+let isPaused = false, isGameOver = false;
+let animationId;
+
+const stars = [];
+for (let i = 0; i < 150; i++) stars.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, size: Math.random() * 2.5, speed: Math.random() * 3 + 1 });
+
+const p1 = { x: 350, y: 620, w: 46, h: 46, speed: 8, color: '#00D4FF', id: 'P1' };
+const p2 = { x: 400, y: 620, w: 46, h: 46, speed: 8, color: '#00FF41', id: 'P2', active: false };
+
+let bullets = [], enemyBullets = [], enemies = [];
+
+const keys = {};
+document.addEventListener('keydown', (e) => {
+    keys[e.code] = true;
+    if (stage === 'MODE_SELECT') {
+        if (e.key === '1') { gameMode = 1; stage = 'DIFF_SELECT'; }
+        if (e.key === '2') { gameMode = 2; stage = 'DIFF_SELECT'; }
+    } else if (stage === 'DIFF_SELECT') {
+        if (e.key === '1') setDifficulty('Easy');
+        if (e.key === '2') setDifficulty('Normal');
+        if (e.key === '3') setDifficulty('Hard');
+    } else {
+        if (e.code === 'KeyP') togglePause();
+        if (e.code === 'KeyR') location.reload();
+    }
+});
+document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+function setDifficulty(level) {
+    difficulty = level;
+    if (level === 'Easy') diffSettings = { spawnRate: 0.018, speedMult: 0.7, bossHP: 10 };
+    else if (level === 'Normal') diffSettings = { spawnRate: 0.03, speedMult: 1.1, bossHP: 15 };
+    else if (level === 'Hard') diffSettings = { spawnRate: 0.05, speedMult: 1.6, bossHP: 25 };
+    
+    stage = 'PLAYING';
+    scoreBox.style.visibility = 'visible';
+    if (gameMode === 1) {
+        p1.x = canvas.width / 2 - 23; p2.active = false; p2Ui.style.display = 'none';
+        statusEl.innerText = `SOLO - ${difficulty}`;
+    } else {
+        p1.x = canvas.width / 2 + 50; p2.x = canvas.width / 2 - 100; p2.active = true; p2Ui.style.display = 'block';
+        statusEl.innerText = `CO-OP - ${difficulty}`;
+    }
+    loop();
+}
+
+function togglePause() {
+    if (isGameOver) return;
+    isPaused = !isPaused;
+    statusEl.innerText = isPaused ? "PAUSED" : `${gameMode === 1 ? 'SOLO' : 'CO-OP'} - ${difficulty}`;
+}
+
+// --- 드로잉 & 업데이트 ---
+
+function drawShip(p) {
+    const {x, y, w, h, color} = p;
+    ctx.fillStyle = Math.random() > 0.5 ? '#FF4500' : '#FFD700';
+    ctx.fillRect(x + w*0.35, y + h, w*0.3, 10);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x + w/2, y); ctx.lineTo(x + w, y + h*0.8); ctx.lineTo(x + w*0.8, y + h);
+    ctx.lineTo(x + w/2, y + h*0.7); ctx.lineTo(x + w*0.2, y + h); ctx.lineTo(x, y + h*0.8);
+    ctx.closePath(); ctx.fill();
+}
+
+function drawEnemy(en) {
+    const {x, y, w, h, type} = en;
+    ctx.fillStyle = type === 'small' ? '#FF69B4' : (type === 'medium' ? '#FF8C00' : '#9400D3');
+    ctx.beginPath();
+    if(type === 'small') {
+        ctx.moveTo(x + w/2, y + h); ctx.lineTo(x + w, y); ctx.lineTo(x + w/2, y + h*0.3); ctx.lineTo(x, y);
+    } else {
+        ctx.moveTo(x + w/2, y + h); ctx.lineTo(x + w, y + h*0.5); ctx.lineTo(x + w*0.8, y); ctx.lineTo(x + w/2, y + h*0.2); ctx.lineTo(x + w*0.2, y); ctx.lineTo(x, y + h*0.5);
+    }
+    ctx.closePath(); ctx.fill();
+    if(type !== 'small') {
+        const target = (p2.active && Math.hypot(p2.x-x, p2.y-y) < Math.hypot(p1.x-x, p1.y-y)) ? p2 : p1;
+        const dx = (target.x + target.w/2) - (x + w/2), dy = (target.y + target.h/2) - (y + h/2);
+        const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+        [{lx: 0.3, ly: 0.35}, {lx: 0.7, ly: 0.35}].forEach(pos => {
+            const ex = x + w * pos.lx, ey = y + h * pos.ly;
+            ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex, ey, w*0.1, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(ex + (dx/dist)*3, ey + (dy/dist)*3, w*0.06, 0, Math.PI*2); ctx.fill();
+        });
+    }
+}
+
+function update() {
+    if (isPaused || isGameOver) return;
+    stars.forEach(s => { s.y += s.speed; if(s.y > canvas.height) s.y = 0; });
+
+    if (keys['ArrowLeft'] && p1.x > 0) p1.x -= p1.speed;
+    if (keys['ArrowRight'] && p1.x < canvas.width - p1.w) p1.x += p1.speed;
+    if (keys['Space'] && !bullets.some(b => b.owner === 'p1' && b.y > p1.y - 120))
+        bullets.push({ x: p1.x + p1.w/2 - 2, y: p1.y, w: 4, h: 18, color: p1.color, owner: 'p1' });
+
+    if (p2.active) {
+        if (keys['KeyA'] && p2.x > 0) p2.x -= p2.speed;
+        if (keys['KeyD'] && p2.x < canvas.width - p2.w) p2.x += p2.speed;
+        if ((keys['ShiftLeft'] || keys['ShiftRight']) && !bullets.some(b => b.owner === 'p2' && b.y > p2.y - 120))
+            bullets.push({ x: p2.x + p2.w/2 - 2, y: p2.y, w: 4, h: 18, color: p2.color, owner: 'p2' });
+    }
+
+    bullets.forEach((b, i) => { b.y -= 12; if(b.y < -20) bullets.splice(i, 1); });
+    enemyBullets.forEach((eb, i) => {
+        eb.y += 6 * diffSettings.speedMult; if(eb.y > canvas.height) enemyBullets.splice(i, 1);
+        [p1, p2].forEach(p => { if(p.active !== false && eb.x < p.x + p.w && eb.x + eb.w > p.x && eb.y < p.y + p.h && eb.y + eb.h > p.y) isGameOver = true; });
+    });
+
+    if (Math.random() < diffSettings.spawnRate) {
+        const roll = Math.random();
+        if (roll < 0.7) enemies.push({ type: 'small', x: Math.random()*(canvas.width-30), y: -30, w: 30, h: 30, speed: 2.2 * diffSettings.speedMult, score: 100, hp: 1 });
+        else if (roll < 0.93) enemies.push({ type: 'medium', x: Math.random()*(canvas.width-50), y: -50, w: 52, h: 52, speed: 1.5 * diffSettings.speedMult, score: 300, hp: 3 });
+        else { enemies.push({ type: 'large', x: Math.random()*(canvas.width-100), y: -100, w: 100, h: 100, speed: 0.8 * diffSettings.speedMult, score: 1200, hp: diffSettings.bossHP, fireTimer: 0 }); statusEl.classList.add('danger'); }
+    }
+
+    enemies.forEach((en, i) => {
+        en.y += en.speed; en.x += Math.sin(en.y/25) * (en.type === 'small' ? 3 : 1.2);
+        if (en.y > canvas.height) isGameOver = true;
+        [p1, p2].forEach(p => { if(p.active !== false && en.y + en.h > p.y && en.x < p.x + p.w && en.x + en.w > p.x) isGameOver = true; });
+
+        if (en.type === 'large') {
+            en.fireTimer++;
+            if(en.fireTimer > 85 / diffSettings.speedMult) {
+                enemyBullets.push({ x: en.x + en.w*0.2, y: en.y + en.h*0.8, w: 8, h: 20 });
+                enemyBullets.push({ x: en.x + en.w*0.8, y: en.y + en.h*0.8, w: 8, h: 20 });
+                en.fireTimer = 0;
+            }
+        }
+        bullets.forEach((b, bi) => {
+            if(b.x < en.x + en.w && b.x + b.w > en.x && b.y < en.y + en.h && b.y + b.h > en.y) {
+                en.hp--; bullets.splice(bi, 1);
+                if(en.hp <= 0) {
+                    if(en.type === 'large') { statusEl.classList.remove('danger'); statusEl.innerText = `${gameMode === 1 ? 'SOLO' : 'CO-OP'} - ${difficulty}`; }
+                    enemies.splice(i, 1);
+                    if(b.owner === 'p1') { p1Score += en.score; p1ScoreEl.innerText = p1Score; }
+                    else { p2Score += en.score; p2ScoreEl.innerText = p2Score; }
+                }
+            }
+        });
+    });
+}
+
+function draw() {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff'; stars.forEach(s => ctx.fillRect(s.x, s.y, s.size, s.size));
+
+    if (stage === 'MODE_SELECT') {
+        ctx.fillStyle = '#00D4FF'; ctx.font = 'bold 50px Courier'; ctx.textAlign = 'center';
+        ctx.fillText("GALAGA JS", canvas.width/2, canvas.height/2 - 60);
+        ctx.fillStyle = '#fff'; ctx.font = '22px Courier';
+        ctx.fillText("[1] Solo Play  |  [2] Co-op Duo", canvas.width/2, canvas.height/2 + 20);
+        return;
+    }
+    if (stage === 'DIFF_SELECT') {
+        ctx.fillStyle = '#FFD700'; ctx.font = 'bold 40px Courier'; ctx.textAlign = 'center';
+        ctx.fillText("SELECT DIFFICULTY", canvas.width/2, canvas.height/2 - 60);
+        ctx.fillStyle = '#fff'; ctx.font = '22px Courier';
+        ctx.fillText("[1] Easy  |  [2] Normal  |  [3] Hard", canvas.width/2, canvas.height/2 + 20);
+        return;
+    }
+
+    drawShip(p1); if (p2.active) drawShip(p2);
+    bullets.forEach(b => { ctx.fillStyle = b.color; ctx.fillRect(b.x, b.y, b.w, b.h); });
+    ctx.fillStyle = '#FF3E3E'; enemyBullets.forEach(eb => ctx.fillRect(eb.x, eb.y, eb.w, eb.h));
+    enemies.forEach(en => drawEnemy(en));
+
+    if (isGameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 45px Courier'; ctx.textAlign = 'center';
+        ctx.fillText('MISSION FAILED', canvas.width/2, canvas.height/2 - 60);
+        
+        ctx.font = '22px Courier';
+        if (gameMode === 2) {
+            ctx.fillStyle = '#00D4FF'; ctx.fillText(`P1 Score: ${p1Score}`, canvas.width/2, canvas.height/2);
+            ctx.fillStyle = '#00FF41'; ctx.fillText(`P2 Score: ${p2Score}`, canvas.width/2, canvas.height/2 + 35);
+            ctx.fillStyle = '#FFD700'; ctx.fillText(`TOTAL: ${p1Score + p2Score}`, canvas.width/2, canvas.height/2 + 80);
+        } else {
+            ctx.fillStyle = '#FFD700'; ctx.fillText(`Score: ${p1Score}`, canvas.width/2, canvas.height/2);
+        }
+        ctx.fillStyle = '#fff'; ctx.fillText('Press R to Restart', canvas.width/2, canvas.height/2 + 130);
+    }
+}
+
+function loop() { update(); draw(); animationId = requestAnimationFrame(loop); }
+draw(); 
+</script>
+</body>
+</html>

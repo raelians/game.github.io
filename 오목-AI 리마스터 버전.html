@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PIN-MOK Master</title>
+  <style>
+    :root {
+      --primary: #2d3436;
+      --accent: #0984e3;
+      --board: #f39c12;
+      --danger: #d63031;
+      --white: #ffffff;
+    }
+    body {
+      margin: 0;
+      font-family: 'Pretendard', sans-serif;
+      background-color: #dfe6e9;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    /* 상단 상태 바 */
+    .status-bar {
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      padding: 12px 25px;
+      background: var(--white);
+      border-radius: 50px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      font-weight: 700;
+      color: var(--primary);
+    }
+
+    .stone-preview {
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      transition: all 0.3s;
+    }
+    .stone-preview.black { background: #2d3436; box-shadow: 0 0 8px rgba(0,0,0,0.4); }
+    .stone-preview.white { background: #fff; border: 2px solid #ddd; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
+    .stone-preview.thinking { animation: blink 0.8s infinite; background: var(--accent); }
+
+    @keyframes blink { 0%, 100% { opacity: 1; transform: scale(1.1); } 50% { opacity: 0.5; transform: scale(0.9); } }
+
+    .game-viewport {
+      position: relative;
+      border-radius: 15px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+      background: var(--board);
+      padding: 10px;
+    }
+
+    canvas { display: block; cursor: crosshair; border-radius: 5px; }
+
+    /* 모달 레이어 */
+    .overlay {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.85);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border-radius: 15px;
+      z-index: 100;
+      backdrop-filter: blur(10px);
+      color: white;
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    .overlay h2 { font-size: 2.5rem; margin-bottom: 20px; }
+
+    /* 컨트롤 버튼 */
+    .controls { margin-top: 25px; display: flex; gap: 15px; }
+    button {
+      padding: 12px 25px;
+      border: none;
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: 0.2s;
+      font-size: 1rem;
+    }
+    button:active { transform: translateY(3px); }
+    .btn-undo { background: #fdcb6e; color: #2d3436; }
+    .btn-reset { background: var(--danger); color: white; }
+    .btn-main { background: var(--accent); color: white; padding: 15px 40px; font-size: 1.2rem; }
+    button:disabled { background: #b2bec3; cursor: not-allowed; }
+
+  </style>
+</head>
+<body>
+
+  <div class="status-bar">
+    <div id="turn-icon" class="stone-preview black"></div>
+    <span id="status-msg">당신의 턴입니다</span>
+  </div>
+
+  <div class="game-viewport">
+    <canvas id="gameCanvas" width="560" height="560"></canvas>
+    
+    <div id="result-layer" class="overlay">
+      <h2 id="winner-text">승리!</h2>
+      <button class="btn-main" onclick="resetGame()">다시 도전</button>
+    </div>
+
+    <div id="confirm-layer" class="overlay">
+      <h2>판을 비울까요?</h2>
+      <div style="display:flex; gap:10px;">
+        <button class="btn-reset" onclick="resetGame()">네, 리셋합니다</button>
+        <button style="background:#636e72; color:white;" onclick="hideConfirm()">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn-undo" id="undo-btn" onclick="undo()">한 수 물리기</button>
+    <button class="btn-reset" onclick="showConfirm()">초기화</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const size = 15;
+    const padding = 35;
+    const cellSize = (canvas.width - padding * 2) / (size - 1);
+    
+    let board = Array.from({ length: size }, () => Array(size).fill(0));
+    let history = [];
+    let isGameOver = false;
+    let isAiThinking = false;
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // 판 그리기
+      ctx.strokeStyle = "#444";
+      ctx.lineWidth = 1;
+      for(let i=0; i<size; i++) {
+        // 가로선
+        ctx.beginPath();
+        ctx.moveTo(padding, padding + i * cellSize);
+        ctx.lineTo(canvas.width - padding, padding + i * cellSize);
+        ctx.stroke();
+        // 세로선
+        ctx.beginPath();
+        ctx.moveTo(padding + i * cellSize, padding);
+        ctx.lineTo(padding + i * cellSize, canvas.height - padding);
+        ctx.stroke();
+      }
+
+      // 화점
+      [3, 7, 11].forEach(r => [3, 7, 11].forEach(c => {
+        ctx.beginPath();
+        ctx.arc(padding + c * cellSize, padding + r * cellSize, 4, 0, Math.PI*2);
+        ctx.fillStyle = "#333";
+        ctx.fill();
+      }));
+
+      // 돌 그리기
+      for(let y=0; y<size; y++) {
+        for(let x=0; x<size; x++) {
+          if(board[y][x] !== 0) drawStone(x, y, board[y][x]);
+        }
+      }
+
+      // 마지막 수 하이라이트
+      if(history.length > 0) {
+        const last = history[history.length - 1];
+        ctx.beginPath();
+        ctx.arc(padding + last.x * cellSize, padding + last.y * cellSize, 6, 0, Math.PI*2);
+        ctx.fillStyle = "#e84393";
+        ctx.fill();
+      }
+    }
+
+    function drawStone(x, y, p) {
+      const cx = padding + x * cellSize;
+      const cy = padding + y * cellSize;
+      ctx.save();
+      ctx.shadowBlur = 5; ctx.shadowColor = "rgba(0,0,0,0.3)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, cellSize/2.3, 0, Math.PI*2);
+      const grad = ctx.createRadialGradient(cx-5, cy-5, 2, cx, cy, cellSize/2);
+      if(p === 1) { // 흑
+        grad.addColorStop(0, "#636e72"); grad.addColorStop(1, "#2d3436");
+      } else { // 백
+        grad.addColorStop(0, "#fff"); grad.addColorStop(1, "#dfe6e9");
+      }
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    canvas.addEventListener('mousedown', e => {
+      if(isGameOver || isAiThinking) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.round((e.clientX - rect.left - padding) / cellSize);
+      const y = Math.round((e.clientY - rect.top - padding) / cellSize);
+
+      if(x >= 0 && x < size && y >= 0 && y < size && board[y][x] === 0) {
+        placeStone(x, y, 1);
+        if(checkWin(x, y, 1)) return endEffect("플레이어 승리! 🎉");
+        
+        // AI 턴
+        startAi();
+      }
+    });
+
+    function placeStone(x, y, p) {
+      board[y][x] = p;
+      history.push({x, y, p});
+      draw();
+      document.getElementById('undo-btn').disabled = history.length === 0;
+    }
+
+    function startAi() {
+      isAiThinking = true;
+      const icon = document.getElementById('turn-icon');
+      icon.className = "stone-preview thinking";
+      document.getElementById('status-msg').innerText = "AI가 수 읽는 중...";
+
+      setTimeout(() => {
+        const move = getBestMove();
+        placeStone(move.x, move.y, 2);
+        if(checkWin(move.x, move.y, 2)) {
+          endEffect("AI 승리! 💥");
+        } else {
+          isAiThinking = false;
+          icon.className = "stone-preview black";
+          document.getElementById('status-msg').innerText = "당신의 턴입니다";
+        }
+      }, 600);
+    }
+
+    function getBestMove() {
+      let bestScore = -1;
+      let move = {x: 7, y: 7};
+      
+      for(let y=0; y<size; y++) {
+        for(let x=0; x<size; x++) {
+          if(board[y][x] === 0) {
+            const score = evaluate(x, y);
+            if(score > bestScore) {
+              bestScore = score;
+              move = {x, y};
+            }
+          }
+        }
+      }
+      return move;
+    }
+
+    function evaluate(x, y) {
+      // 간단한 가중치 로직 (공격과 방어 점수 합산)
+      return checkPattern(x, y, 2) * 1.2 + checkPattern(x, y, 1);
+    }
+
+    function checkPattern(x, y, p) {
+      const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+      let maxLen = 0;
+      dirs.forEach(([dx, dy]) => {
+        let count = 1;
+        [-1, 1].forEach(dir => {
+          let nx = x + dx*dir, ny = y + dy*dir;
+          while(nx>=0 && nx<size && ny>=0 && ny<size && board[ny][nx] === p) {
+            count++; nx += dx*dir; ny += dy*dir;
+          }
+        });
+        maxLen = Math.max(maxLen, count);
+      });
+      return Math.pow(maxLen, 3); // 패턴 길이에 따른 기하급수적 점수
+    }
+
+    function checkWin(x, y, p) {
+      const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+      for(let [dx, dy] of dirs) {
+        let count = 1;
+        for(let dir of [-1, 1]) {
+          let nx = x + dx*dir, ny = y + dy*dir;
+          while(nx>=0 && nx<size && ny>=0 && ny<size && board[ny][nx] === p) {
+            count++; nx += dx*dir; ny += dy*dir;
+            if(count >= 5) return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    function endEffect(msg) {
+      isGameOver = true;
+      const layer = document.getElementById('result-layer');
+      document.getElementById('winner-text').innerText = msg;
+      layer.style.display = 'flex';
+    }
+
+    function undo() {
+      if(history.length < 2 || isGameOver || isAiThinking) return;
+      // 플레이어와 AI의 수를 동시에 무름
+      for(let i=0; i<2; i++) {
+        const last = history.pop();
+        board[last.y][last.x] = 0;
+      }
+      draw();
+      document.getElementById('undo-btn').disabled = history.length === 0;
+    }
+
+    function showConfirm() { document.getElementById('confirm-layer').style.display = 'flex'; }
+    function hideConfirm() { document.getElementById('confirm-layer').style.display = 'none'; }
+
+    function resetGame() {
+      board = Array.from({ length: size }, () => Array(size).fill(0));
+      history = [];
+      isGameOver = false;
+      isAiThinking = false;
+      document.getElementById('result-layer').style.display = 'none';
+      document.getElementById('confirm-layer').style.display = 'none';
+      document.getElementById('status-msg').innerText = "당신의 턴입니다";
+      document.getElementById('turn-icon').className = "stone-preview black";
+      draw();
+    }
+
+    // 초기 실행
+    draw();
+  </script>
+</body>
+</html>

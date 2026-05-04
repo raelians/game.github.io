@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>JS Geo Dash - Ultimate Slopes Edition</title>
+    <style>
+        body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #111; overflow: hidden; font-family: 'Arial', sans-serif; }
+        #gameContainer { position: relative; box-shadow: 0 0 50px rgba(0,0,0,0.5); }
+        canvas { border: 4px solid #fff; background: linear-gradient(180deg, #6dd5ed 0%, #2193b0 100%); display: block; }
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(0,0,0,0.75); color: white; z-index: 20; text-align: center; }
+        .hidden { display: none !important; }
+        button { padding: 12px 30px; font-size: 18px; cursor: pointer; border: none; border-radius: 8px; background: #fff; color: #333; font-weight: bold; margin: 8px; transition: 0.2s; }
+        button:hover { background: #ff0055; color: #fff; transform: scale(1.1); }
+        #scoreBoard { position: absolute; top: 25px; left: 25px; color: white; font-size: 32px; font-weight: bold; z-index: 10; pointer-events: none; }
+        #gravityAlert { position: absolute; top: 25px; right: 80px; color: #ffff00; font-size: 20px; font-weight: bold; z-index: 10; }
+        #pauseBtn { position: absolute; top: 25px; right: 25px; z-index: 30; padding: 8px 15px; cursor: pointer; background: rgba(255,255,255,0.2); border: 1px solid white; color: white; border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+    <div id="gameContainer">
+        <div id="scoreBoard">Score: 0</div>
+        <div id="gravityAlert"></div>
+        <button id="pauseBtn" onclick="togglePause()">P</button>
+
+        <div id="startMenu" class="overlay">
+            <h1>GEO DASH</h1>
+            <div>
+                <button onclick="startGame('easy')">EASY</button>
+                <button onclick="startGame('normal')">NORMAL</button>
+                <button onclick="startGame('hard')">HARD</button>
+            </div>
+        </div>
+
+        <div id="pauseMenu" class="overlay hidden">
+            <h1>PAUSED</h1>
+            <button onclick="togglePause()">RESUME</button>
+        </div>
+
+        <div id="gameOverMenu" class="overlay hidden">
+            <h1 style="color: #ff0055;">CRASHED!</h1>
+            <p id="finalScore">Score: 0</p>
+            <button onclick="startGame(currentDiff)">RETRY</button>
+            <button onclick="location.reload()">MENU</button>
+        </div>
+
+        <canvas id="gameCanvas" width="900" height="400"></canvas>
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    let gravity, jumpStrength, gameSpeed, maxObstacles, spawnInterval, currentDiff;
+    let score = 0, isGameOver = false, isPaused = false, isReversed = false;
+    let obstacles = [], mountains = [], frameCount = 0, lastSpawnFrame = 0;
+    const CEILING_BASE = 60, GROUND_BASE = canvas.height - 60;
+
+    // --- 지형 로직 ---
+    function getGroundY(x, isCeiling = false) {
+        let wave = Math.sin((x + frameCount * gameSpeed) * 0.002) * 30;
+        return isCeiling ? CEILING_BASE + wave : GROUND_BASE + wave;
+    }
+
+    class Mountain {
+        constructor(x = null) {
+            this.w = 200 + Math.random() * 200;
+            this.h = 100 + Math.random() * 150;
+            this.x = (x !== null) ? x : canvas.width;
+            this.color = `rgb(30, ${100 + Math.floor(Math.random() * 80)}, 50)`;
+        }
+        draw() {
+            let baseLine = getGroundY(this.x + this.w/2);
+            ctx.fillStyle = this.color;
+            ctx.beginPath(); ctx.moveTo(this.x, baseLine);
+            ctx.lineTo(this.x + this.w / 2, baseLine - this.h);
+            ctx.lineTo(this.x + this.w, baseLine); ctx.fill();
+        }
+        update() { if (!isPaused) this.x -= 1.5; }
+    }
+
+    const player = {
+        x: 150, y: 0, w: 40, h: 40, vy: 0, rotation: 0, grounded: false,
+        draw() {
+            ctx.save(); ctx.translate(this.x + this.w/2, this.y + this.h/2);
+            if (isReversed) ctx.scale(1, -1); ctx.rotate(this.rotation);
+            ctx.fillStyle = '#ff0055'; ctx.fillRect(-this.w/2, -this.h/2, this.w, this.h);
+            ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.strokeRect(-this.w/2, -this.h/2, this.w, this.h);
+            ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(-8,-10,7,0,Math.PI*2); ctx.arc(8,-10,7,0,Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(-8,-8,3,0,Math.PI*2); ctx.arc(8,-8,3,0,Math.PI*2); ctx.fill();
+            ctx.strokeStyle = '#000'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(-7,10); ctx.lineTo(7,10); ctx.stroke();
+            ctx.restore();
+        },
+        update() {
+            if (isPaused) return;
+            this.vy += gravity; this.y += this.vy;
+            let ground = getGroundY(this.x);
+            let ceiling = getGroundY(this.x, true);
+
+            if (!isReversed) {
+                if (this.y > ground - this.h) { this.y = ground - this.h; this.vy = 0; this.grounded = true; this.rotation = Math.round(this.rotation / (Math.PI/2)) * (Math.PI/2); }
+                else { this.rotation += 0.16; this.grounded = false; }
+            } else {
+                if (this.y < ceiling) { this.y = ceiling; this.vy = 0; this.grounded = true; this.rotation = Math.round(this.rotation / (Math.PI/2)) * (Math.PI/2); }
+                else { this.rotation -= 0.16; this.grounded = false; }
+            }
+        }
+    };
+
+    class Obstacle {
+        constructor(offsetX = 0) {
+            this.w = 30; this.h = 40 + Math.random() * 20;
+            this.x = canvas.width + offsetX; this.inverted = isReversed;
+        }
+        draw() {
+            let baseLine = getGroundY(this.x + this.w/2, this.inverted);
+            ctx.fillStyle = '#000'; ctx.beginPath();
+            if (!this.inverted) {
+                ctx.moveTo(this.x, baseLine); ctx.lineTo(this.x + this.w/2, baseLine - this.h); ctx.lineTo(this.x + this.w, baseLine);
+            } else {
+                ctx.moveTo(this.x, baseLine); ctx.lineTo(this.x + this.w/2, baseLine + this.h); ctx.lineTo(this.x + this.w, baseLine);
+            }
+            ctx.fill(); ctx.strokeStyle = '#fff'; ctx.stroke();
+        }
+        update() { if (!isPaused) this.x -= gameSpeed; }
+    }
+
+    // --- 시스템 기능 ---
+    function togglePause() { if (!isGameOver) { isPaused = !isPaused; document.getElementById('pauseMenu').classList.toggle('hidden', !isPaused); } }
+    
+    function toggleGravity() {
+        if (isGameOver) return;
+        isReversed = !isReversed; gravity *= -1; jumpStrength *= -1;
+        document.getElementById('gravityAlert').innerText = isReversed ? "GRAVITY INVERTED!" : "";
+        setTimeout(() => { if (isReversed && !isGameOver) toggleGravity(); }, 5000);
+    }
+
+    function startGame(diff) {
+        currentDiff = diff;
+        if (diff === 'easy') { gravity = 0.7; jumpStrength = -12; gameSpeed = 6; maxObstacles = 1; spawnInterval = 90; }
+        else if (diff === 'normal') { gravity = 0.8; jumpStrength = -13; gameSpeed = 8; maxObstacles = 3; spawnInterval = 75; }
+        else { gravity = 1.0; jumpStrength = -15; gameSpeed = 11; maxObstacles = 4; spawnInterval = 55; }
+
+        score = 0; isGameOver = false; isPaused = false; isReversed = false; obstacles = []; mountains = []; frameCount = 0;
+        document.getElementById('startMenu').classList.add('hidden');
+        document.getElementById('gameOverMenu').classList.add('hidden');
+        let curX = -100; while(curX < canvas.width) { mountains.push(new Mountain(curX)); curX += 150; }
+        gameLoop();
+    }
+
+    function gameLoop() {
+        if (isGameOver) return;
+        if (!isPaused) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (frameCount > 0 && frameCount % 600 === 0 && Math.random() < 0.5) toggleGravity();
+            
+            // 1. 산 배경
+            if (frameCount % 120 === 0 && Math.random() < 0.5) mountains.push(new Mountain());
+            mountains.forEach((m, i) => { m.update(); m.draw(); if(m.x + m.w < 0) mountains.splice(i,1); });
+
+            // 2. 지형 렌더링 (바닥 & 천장)
+            ctx.fillStyle = '#333';
+            [false, true].forEach(ceil => {
+                ctx.beginPath(); ctx.moveTo(0, ceil ? 0 : canvas.height);
+                for (let x = 0; x <= canvas.width; x += 15) ctx.lineTo(x, getGroundY(x, ceil));
+                ctx.lineTo(canvas.width, ceil ? 0 : canvas.height); ctx.fill();
+            });
+
+            // 3. 바닥 줄무늬
+            ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 2;
+            let spacing = 50, offset = (frameCount * gameSpeed) % spacing;
+            for (let x = -spacing; x <= canvas.width + spacing; x += spacing) {
+                let lx = x - offset;
+                ctx.beginPath(); ctx.moveTo(lx, getGroundY(lx)); ctx.lineTo(lx - 15, canvas.height); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(lx, getGroundY(lx, true)); ctx.lineTo(lx + 15, 0); ctx.stroke();
+            }
+
+            player.update(); player.draw();
+
+            // 4. 장애물 생성 (멀티플 가시)
+            if (Math.random() < 0.05 && frameCount - lastSpawnFrame > spawnInterval) {
+                let count = Math.floor(Math.random() * maxObstacles) + 1;
+                for(let i=0; i<count; i++) obstacles.push(new Obstacle(i * 32));
+                lastSpawnFrame = frameCount;
+            }
+
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].update(); obstacles[i].draw();
+                let hitY = getGroundY(obstacles[i].x + obstacles[i].w/2, obstacles[i].inverted);
+                if (player.x + 8 < obstacles[i].x + obstacles[i].w && player.x + player.w - 8 > obstacles[i].x &&
+                    (obstacles[i].inverted ? player.y < hitY + obstacles[i].h : player.y + player.h > hitY - obstacles[i].h)) {
+                    isGameOver = true; document.getElementById('finalScore').innerText = "Score: " + score;
+                    document.getElementById('gameOverMenu').classList.remove('hidden');
+                }
+                if (obstacles[i].x + obstacles[i].w < 0) { obstacles.splice(i, 1); score++; document.getElementById('scoreBoard').innerText = "Score: " + score; }
+            }
+            frameCount++;
+        }
+        requestAnimationFrame(gameLoop);
+    }
+
+    window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' && player.grounded) player.vy = jumpStrength;
+        if (e.code === 'KeyP') togglePause();
+    });
+</script>
+</body>
+</html>

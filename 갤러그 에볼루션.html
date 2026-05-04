@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Galaga Evolution: Fixed UI</title>
+    <style>
+        body { background: #050505; color: #fff; font-family: 'Courier New', Courier, monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; overflow: hidden; }
+        canvas { border: 4px solid #444; background: #000; box-shadow: 0 0 50px rgba(0, 212, 255, 0.15); }
+        .info { margin-bottom: 10px; text-align: center; width: 750px; display: flex; justify-content: space-between; align-items: flex-end; }
+        #status { font-size: 1.2em; font-weight: bold; color: #00D4FF; margin: 0; }
+        .stats-container { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+        .score-row { font-size: 1.1em; display: flex; gap: 20px; visibility: hidden; }
+        .life-row { font-size: 1.2em; color: #FF3E3E; visibility: hidden; font-weight: bold; }
+        .p1-color { color: #00D4FF; } .p2-color { color: #00FF41; }
+        .controls { margin-top: 10px; font-size: 0.85em; color: #aaa; text-align: center; }
+        .stage-up { position: absolute; font-size: 4em; color: #FFD700; font-weight: bold; z-index: 10; display: none; pointer-events: none; text-shadow: 0 0 20px #FFD700; }
+    </style>
+</head>
+<body>
+    <div id="stageText" class="stage-up">STAGE UP!</div>
+    <div class="info">
+        <div>
+            <h2 id="status">SELECT MODE & DIFFICULTY</h2>
+            <div id="lifeBox" class="life-row">LIVES: <span id="lives">3</span></div>
+        </div>
+        <div class="stats-container">
+            <div id="scoreBox" class="score-row">
+                <div class="p1-color">P1: <span id="p1Score">0</span></div>
+                <div id="p2Ui" class="p2-color">P2: <span id="p2Score">0</span></div>
+            </div>
+            <div id="stageUi" style="color: #FFD700; visibility: hidden;">STAGE: <span id="stageNum">1</span></div>
+        </div>
+    </div>
+    <canvas id="gameCanvas" width="750" height="700"></canvas>
+    <div id="controlInfo" class="controls">Select Mode [1/2] -> Difficulty [1/2/3]</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const p1ScoreEl = document.getElementById('p1Score'), p2ScoreEl = document.getElementById('p2Score');
+const livesEl = document.getElementById('lives'), stageNumEl = document.getElementById('stageNum');
+const statusEl = document.getElementById('status'), p2Ui = document.getElementById('p2Ui');
+const scoreBox = document.getElementById('scoreBox'), lifeBox = document.getElementById('lifeBox'), stageUi = document.getElementById('stageUi');
+
+let gameState = 'MODE_SELECT', gameMode = 1, difficulty = 'Normal', stage = 1;
+let p1Score = 0, p2Score = 0, lives = 3, isPaused = false, isGameOver = false;
+let diffSettings = { spawnRate: 0.03, speedMult: 1, bossHP: 15 };
+let p1Power = 1, p2Power = 1;
+
+const stars = [];
+for (let i = 0; i < 150; i++) stars.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, size: Math.random() * 2.5, speed: Math.random() * 3 + 1 });
+
+const p1 = { x: 350, y: 620, w: 46, h: 46, speed: 8, color: '#00D4FF' };
+const p2 = { x: 400, y: 620, w: 46, h: 46, speed: 8, color: '#00FF41', active: false };
+
+let bullets = [], enemyBullets = [], enemies = [];
+const keys = {};
+
+document.addEventListener('keydown', (e) => {
+    if (gameState === 'MODE_SELECT') {
+        if (e.key === '1') { gameMode = 1; gameState = 'DIFF_SELECT'; }
+        if (e.key === '2') { gameMode = 2; gameState = 'DIFF_SELECT'; }
+    } else if (gameState === 'DIFF_SELECT') {
+        if (e.key === '1') start('Easy');
+        if (e.key === '2') start('Normal');
+        if (e.key === '3') start('Hard');
+    } else {
+        if (e.code === 'KeyP') isPaused = !isPaused;
+        if (e.code === 'KeyR') location.reload();
+    }
+    keys[e.code] = true;
+});
+document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+function start(level) {
+    difficulty = level;
+    if (level === 'Easy') diffSettings = { spawnRate: 0.02, speedMult: 0.8, bossHP: 10 };
+    else if (level === 'Normal') diffSettings = { spawnRate: 0.035, speedMult: 1.1, bossHP: 15 };
+    else if (level === 'Hard') diffSettings = { spawnRate: 0.05, speedMult: 1.5, bossHP: 25 };
+    
+    gameState = 'PLAYING';
+    scoreBox.style.visibility = lifeBox.style.visibility = stageUi.style.visibility = 'visible';
+    livesEl.innerText = lives; // 초기 수명 설정
+    if (gameMode === 1) { p1.x = 350; p2.active = false; p2Ui.style.display = 'none'; }
+    else { p1.x = 450; p2.x = 250; p2.active = true; p2Ui.style.display = 'block'; }
+    loop();
+}
+
+function fire(p, power, ownerId) {
+    const shoot = (angle) => {
+        bullets.push({ x: p.x + p.w/2 - 2, y: p.y, w: 4, h: 18, color: p.color, owner: ownerId, vx: angle });
+    };
+    if (power === 1) shoot(0);
+    else { shoot(0); shoot(-2.5); shoot(2.5); }
+}
+
+function playerHit() {
+    lives--;
+    if (lives < 0) lives = 0;
+    livesEl.innerText = lives; // 숫자로 표시하여 문자 깨짐 방지
+    
+    p1Power = p2Power = 1; 
+    enemies = []; enemyBullets = []; bullets = []; 
+    
+    if (lives <= 0) {
+        isGameOver = true;
+    } else {
+        // 잠시 멈췄다 재생성되는 느낌을 주기 위해 좌표 초기화
+        p1.x = gameMode === 1 ? 350 : 450;
+        if(p2.active) p2.x = 250;
+    }
+}
+
+function update() {
+    if (isPaused || isGameOver) return;
+
+    let totalScore = p1Score + p2Score;
+    if (totalScore >= stage * 5000) {
+        stage++;
+        stageNumEl.innerText = stage;
+        diffSettings.spawnRate += 0.005;
+        diffSettings.speedMult += 0.1;
+        showStageUp();
+    }
+
+    stars.forEach(s => { s.y += s.speed; if(s.y > canvas.height) s.y = 0; });
+
+    if (keys['ArrowLeft'] && p1.x > 0) p1.x -= p1.speed;
+    if (keys['ArrowRight'] && p1.x < canvas.width - p1.w) p1.x += p1.speed;
+    if (keys['Space'] && !bullets.some(b => b.owner === 'p1' && b.y > p1.y - 150)) fire(p1, p1Power, 'p1');
+
+    if (p2.active) {
+        if (keys['KeyA'] && p2.x > 0) p2.x -= p2.speed;
+        if (keys['KeyD'] && p2.x < canvas.width - p2.w) p2.x += p2.speed;
+        if ((keys['ShiftLeft'] || keys['ShiftRight']) && !bullets.some(b => b.owner === 'p2' && b.y > p2.y - 150)) fire(p2, p2Power, 'p2');
+    }
+
+    bullets.forEach((b, i) => { 
+        b.y -= 12; b.x += (b.vx || 0);
+        if(b.y < -20 || b.x < 0 || b.x > canvas.width) bullets.splice(i, 1); 
+    });
+
+    const checkHit = (obj) => {
+        const targets = p2.active ? [p1, p2] : [p1];
+        for (let p of targets) {
+            if (obj.x < p.x + p.w && obj.x + (obj.w || 8) > p.x && obj.y < p.y + p.h && obj.y + (obj.h || 20) > p.y) {
+                playerHit();
+                return true; 
+            }
+        }
+        return false;
+    };
+
+    for (let i = enemyBullets.length - 1; i >= 0; i--) {
+        let eb = enemyBullets[i];
+        eb.y += 6 * diffSettings.speedMult;
+        if(eb.y > canvas.height) { enemyBullets.splice(i, 1); continue; }
+        if(checkHit(eb)) break; 
+    }
+
+    if (Math.random() < diffSettings.spawnRate) {
+        const roll = Math.random();
+        if (roll < 0.7) enemies.push({ type: 'small', x: Math.random()*700, y: -30, w: 30, h: 30, speed: 2.2 * diffSettings.speedMult, hp: 1, score: 100 });
+        else if (roll < 0.93) enemies.push({ type: 'medium', x: Math.random()*700, y: -50, w: 52, h: 52, speed: 1.5 * diffSettings.speedMult, hp: 3, score: 300 });
+        else enemies.push({ type: 'large', x: Math.random()*650, y: -100, w: 100, h: 100, speed: 0.8 * diffSettings.speedMult, hp: diffSettings.bossHP, score: 1200, fireTimer: 0 });
+    }
+
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        let en = enemies[i];
+        en.y += en.speed; en.x += Math.sin(en.y/25) * (en.type === 'small' ? 3 : 1.2);
+        if (en.y > canvas.height) { playerHit(); break; }
+        if (checkHit(en)) break;
+
+        if (en.type === 'large') {
+            en.fireTimer++;
+            if(en.fireTimer > 80 / diffSettings.speedMult) {
+                enemyBullets.push({ x: en.x + en.w*0.2, y: en.y + en.h*0.8, w: 8, h: 20 });
+                enemyBullets.push({ x: en.x + en.w*0.8, y: en.y + en.h*0.8, w: 8, h: 20 });
+                en.fireTimer = 0;
+            }
+        }
+
+        for (let bi = bullets.length - 1; bi >= 0; bi--) {
+            let b = bullets[bi];
+            if(b.x < en.x + en.w && b.x + b.w > en.x && b.y < en.y + en.h && b.y + b.h > en.y) {
+                en.hp--; bullets.splice(bi, 1);
+                if(en.hp <= 0) {
+                    if(en.type === 'large') { if(b.owner === 'p1') p1Power = 3; else p2Power = 3; }
+                    enemies.splice(i, 1);
+                    if(b.owner === 'p1') { p1Score += en.score; p1ScoreEl.innerText = p1Score; }
+                    else { p2Score += en.score; p2ScoreEl.innerText = p2Score; }
+                }
+                break;
+            }
+        }
+    }
+}
+
+function showStageUp() {
+    const el = document.getElementById('stageText');
+    el.style.display = 'block';
+    setTimeout(() => { el.style.display = 'none'; }, 2000);
+}
+
+function drawShip(p) {
+    const {x, y, w, h, color} = p;
+    ctx.fillStyle = Math.random() > 0.5 ? '#FF4500' : '#FFD700';
+    ctx.fillRect(x + w*0.35, y + h, w*0.3, 10);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x + w/2, y); ctx.lineTo(x + w, y + h*0.8); ctx.lineTo(x + w*0.8, y + h);
+    ctx.lineTo(x + w/2, y + h*0.7); ctx.lineTo(x + w*0.2, y + h); ctx.lineTo(x, y + h*0.8);
+    ctx.closePath(); ctx.fill();
+}
+
+function drawEnemy(en) {
+    const {x, y, w, h, type} = en;
+    ctx.fillStyle = type === 'small' ? '#FF69B4' : (type === 'medium' ? '#FF8C00' : '#9400D3');
+    ctx.beginPath();
+    if(type === 'small') {
+        ctx.moveTo(x + w/2, y + h); ctx.lineTo(x + w, y); ctx.lineTo(x + w/2, y + h*0.3); ctx.lineTo(x, y);
+    } else {
+        ctx.moveTo(x + w/2, y + h); ctx.lineTo(x + w, y + h*0.5); ctx.lineTo(x + w*0.8, y); ctx.lineTo(x + w/2, y + h*0.2); ctx.lineTo(x + w*0.2, y); ctx.lineTo(x, y + h*0.5);
+    }
+    ctx.closePath(); ctx.fill();
+    if(type !== 'small') {
+        const target = (p2.active && Math.hypot(p2.x-x, p2.y-y) < Math.hypot(p1.x-x, p1.y-y)) ? p2 : p1;
+        const dx = (target.x + target.w/2) - (x + w/2), dy = (target.y + target.h/2) - (y + h/2);
+        const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+        [{lx: 0.3, ly: 0.35}, {lx: 0.7, ly: 0.35}].forEach(pos => {
+            const ex = x + w * pos.lx, ey = y + h * pos.ly;
+            ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex, ey, w*0.1, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(ex + (dx/dist)*3, ey + (dy/dist)*3, w*0.06, 0, Math.PI*2); ctx.fill();
+        });
+    }
+}
+
+function draw() {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff'; stars.forEach(s => ctx.fillRect(s.x, s.y, s.size, s.size));
+
+    if (gameState === 'MODE_SELECT') {
+        ctx.fillStyle = '#00D4FF'; ctx.font = 'bold 50px Courier'; ctx.textAlign = 'center';
+        ctx.fillText("GALAGA EVOLUTION", canvas.width/2, canvas.height/2 - 60);
+        ctx.fillStyle = '#fff'; ctx.font = '22px Courier';
+        ctx.fillText("[1] Solo Mission  |  [2] Co-op Duo", canvas.width/2, canvas.height/2 + 20);
+    } else if (gameState === 'DIFF_SELECT') {
+        ctx.fillStyle = '#FFD700'; ctx.font = 'bold 40px Courier'; ctx.textAlign = 'center';
+        ctx.fillText("SELECT DIFFICULTY", canvas.width/2, canvas.height/2 - 60);
+        ctx.fillStyle = '#fff'; ctx.font = '22px Courier';
+        ctx.fillText("[1] Easy  |  [2] Normal  |  [3] Hard", canvas.width/2, canvas.height/2 + 20);
+    } else {
+        drawShip(p1); if (p2.active) drawShip(p2);
+        bullets.forEach(b => { ctx.fillStyle = b.color; ctx.fillRect(b.x, b.y, b.w, b.h); });
+        ctx.fillStyle = '#FF3E3E'; enemyBullets.forEach(eb => ctx.fillRect(eb.x, eb.y, eb.w, eb.h));
+        enemies.forEach(en => drawEnemy(en));
+
+        if (isGameOver) {
+            ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 45px Courier'; ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', canvas.width/2, canvas.height/2 - 60);
+            ctx.font = '22px Courier';
+            ctx.fillStyle = '#FFD700'; ctx.fillText(`Final Stage: ${stage} | Total Score: ${p1Score + p2Score}`, canvas.width/2, canvas.height/2);
+            ctx.fillStyle = '#fff'; ctx.fillText('Press R to Restart', canvas.width/2, canvas.height/2 + 60);
+        }
+    }
+}
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+draw();
+</script>
+</body>
+</html>

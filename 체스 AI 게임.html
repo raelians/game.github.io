@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>AI 체스 대결</title>
+    <style>
+        :root { --bg: #1a1a2e; --board-light: #ebecd0; --board-dark: #779556; --selected: #f6f669; --possible: rgba(0,0,0,0.15); --capture: rgba(255,0,0,0.3); }
+        body { background: var(--bg); color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; font-family: 'Segoe UI', sans-serif; }
+        .header { width: 480px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; }
+        #board { display: grid; grid-template-columns: repeat(8, 60px); grid-template-rows: repeat(8, 60px); border: 5px solid #333; position: relative; }
+        .square { width: 60px; height: 60px; display: flex; justify-content: center; align-items: center; cursor: pointer; position: relative; }
+        .square.light { background: var(--board-light); }
+        .square.dark { background: var(--board-dark); }
+        .square.selected { background: var(--selected) !important; }
+        .possible-dot { width: 18px; height: 18px; background: var(--possible); border-radius: 50%; pointer-events: none; }
+        .capture-ring { position: absolute; width: 50px; height: 50px; border: 4px solid var(--capture); border-radius: 50%; pointer-events: none; }
+        .piece { width: 50px; height: 50px; pointer-events: none; z-index: 2; }
+        button { background: #e94560; color: white; border: none; padding: 8px 15px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .btn-mode { background: #16213e; border: 1px solid #4ecca3; color: #4ecca3; }
+        .btn-mode.active { background: #4ecca3; color: #1a1a2e; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div id="turn-display" style="font-size: 20px; font-weight: bold;">White's Turn</div>
+    <button onclick="initGame()">재시작</button>
+</div>
+
+<div class="controls">
+    <button id="pvc-btn" class="btn-mode active" onclick="setMode('pvc')">사람 vs AI</button>
+    <button id="pvp-btn" class="btn-mode" onclick="setMode('pvp')">사람 vs 사람</button>
+</div>
+
+<div id="board"></div>
+
+<script>
+const boardEl = document.getElementById('board');
+const turnEl = document.getElementById('turn-display');
+const PIECE_SVG = {
+    white: { p: 'https://upload.wikimedia.org/wikipedia/commons/4/45/Chess_plt45.svg', r: 'https://upload.wikimedia.org/wikipedia/commons/7/72/Chess_rlt45.svg', n: 'https://upload.wikimedia.org/wikipedia/commons/7/70/Chess_nlt45.svg', b: 'https://upload.wikimedia.org/wikipedia/commons/b/b1/Chess_blt45.svg', q: 'https://upload.wikimedia.org/wikipedia/commons/1/15/Chess_qlt45.svg', k: 'https://upload.wikimedia.org/wikipedia/commons/4/42/Chess_klt45.svg' },
+    black: { p: 'https://upload.wikimedia.org/wikipedia/commons/c/c7/Chess_pdt45.svg', r: 'https://upload.wikimedia.org/wikipedia/commons/f/ff/Chess_rdt45.svg', n: 'https://upload.wikimedia.org/wikipedia/commons/e/ef/Chess_ndt45.svg', b: 'https://upload.wikimedia.org/wikipedia/commons/9/98/Chess_bdt45.svg', q: 'https://upload.wikimedia.org/wikipedia/commons/4/47/Chess_qdt45.svg', k: 'https://upload.wikimedia.org/wikipedia/commons/f/f0/Chess_kdt45.svg' }
+};
+
+const VALUES = { p: 10, n: 30, b: 30, r: 50, q: 90, k: 900 };
+
+let board = [];
+let selectedSquare = null;
+let possibleMoves = [];
+let turn = 'white';
+let gameMode = 'pvc';
+
+function setMode(mode) {
+    gameMode = mode;
+    document.querySelectorAll('.btn-mode').forEach(b => b.classList.remove('active'));
+    document.getElementById(mode + '-btn').classList.add('active');
+    initGame();
+}
+
+function initGame() {
+    turn = 'white'; selectedSquare = null; possibleMoves = [];
+    createBoardData(); renderBoard();
+    updateStatus();
+}
+
+function createBoardData() {
+    const layout = [
+        ['r','n','b','q','k','b','n','r'], ['p','p','p','p','p','p','p','p'],
+        Array(8).fill(null), Array(8).fill(null), Array(8).fill(null), Array(8).fill(null),
+        ['p','p','p','p','p','p','p','p'], ['r','n','b','q','k','b','n','r']
+    ];
+    board = layout.map((row, r) => row.map(type => type ? { type, color: r < 2 ? 'black' : 'white' } : null));
+}
+
+function renderBoard() {
+    boardEl.innerHTML = '';
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const square = document.createElement('div');
+            square.className = `square ${(r + c) % 2 === 0 ? 'light' : 'dark'}`;
+            if (selectedSquare?.r === r && selectedSquare?.c === c) square.classList.add('selected');
+            
+            const move = possibleMoves.find(m => m.r === r && m.c === c);
+            if (move) {
+                const guide = document.createElement('div');
+                guide.className = move.capture ? 'capture-ring' : 'possible-dot';
+                square.appendChild(guide);
+            }
+
+            if (board[r][c]) {
+                const img = document.createElement('img');
+                img.src = PIECE_SVG[board[r][c].color][board[r][c].type];
+                img.className = 'piece';
+                square.appendChild(img);
+            }
+            square.onclick = () => handleSquareClick(r, c);
+            boardEl.appendChild(square);
+        }
+    }
+}
+
+function handleSquareClick(r, c) {
+    if (gameMode === 'pvc' && turn === 'black') return;
+    
+    const isPossible = possibleMoves.some(m => m.r === r && m.c === c);
+    if (isPossible) {
+        makeMove(selectedSquare.r, selectedSquare.c, r, c);
+    } else if (board[r][c]?.color === turn) {
+        selectedSquare = { r, c };
+        calculatePossibleMoves(r, c);
+    }
+    renderBoard();
+}
+
+function makeMove(fr, fc, tr, tc) {
+    board[tr][tc] = board[fr][fc];
+    board[fr][fc] = null;
+    turn = turn === 'white' ? 'black' : 'white';
+    selectedSquare = null;
+    possibleMoves = [];
+    renderBoard();
+    updateStatus();
+
+    if (gameMode === 'pvc' && turn === 'black') {
+        setTimeout(makeAiMove, 500);
+    }
+}
+
+function updateStatus() {
+    turnEl.innerText = turn === 'white' ? "White's Turn" : "Black's Turn";
+    turnEl.style.color = turn === 'white' ? "#4ecca3" : "#e94560";
+}
+
+// --- AI 로직 (간순 탐색) ---
+function makeAiMove() {
+    let bestMove = null;
+    let maxScore = -Infinity;
+    
+    const allMoves = [];
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            if (board[r][c]?.color === 'black') {
+                for (let tr = 0; tr < 8; tr++) {
+                    for (let tc = 0; tc < 8; tc++) {
+                        if (canMove(r, c, tr, tc)) {
+                            // 단순 가치 평가: 잡는 기물의 가치
+                            let score = board[tr][tc] ? VALUES[board[tr][tc].type] : 0;
+                            allMoves.push({ fr: r, fc: c, tr, tc, score });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (allMoves.length > 0) {
+        // 점수 높은 순으로 섞어서 선택 (무작위성 부여)
+        allMoves.sort((a, b) => b.score - a.score || Math.random() - 0.5);
+        bestMove = allMoves[0];
+        makeMove(bestMove.fr, bestMove.fc, bestMove.tr, bestMove.tc);
+    }
+}
+
+function calculatePossibleMoves(fr, fc) {
+    possibleMoves = [];
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            if (canMove(fr, fc, r, c)) possibleMoves.push({ r, c, capture: !!board[r][c] });
+        }
+    }
+}
+
+function canMove(fr, fc, tr, tc) {
+    const p = board[fr][fc];
+    if (!p) return false;
+    const target = board[tr][tc];
+    if (target?.color === p.color) return false;
+
+    const dr = tr - fr, dc = tc - fc;
+    const absR = Math.abs(dr), absC = Math.abs(dc);
+
+    switch (p.type) {
+        case 'k': return absR <= 1 && absC <= 1;
+        case 'q': return (fr === tr || fc === tc || absR === absC) && isPathClear(fr, fc, tr, tc);
+        case 'r': return (fr === tr || fc === tc) && isPathClear(fr, fc, tr, tc);
+        case 'b': return (absR === absC) && isPathClear(fr, fc, tr, tc);
+        case 'n': return (absR === 2 && absC === 1) || (absR === 1 && absC === 2);
+        case 'p':
+            const dir = p.color === 'white' ? -1 : 1;
+            if (fc === tc && !target) {
+                if (dr === dir) return true;
+                if (fr === (p.color === 'white' ? 6 : 1) && dr === 2 * dir && !board[fr + dir][fc]) return true;
+            }
+            return absC === 1 && dr === dir && !!target;
+    }
+    return false;
+}
+
+function isPathClear(fr, fc, tr, tc) {
+    const sR = tr === fr ? 0 : (tr > fr ? 1 : -1);
+    const sC = tc === fc ? 0 : (tc > fc ? 1 : -1);
+    let r = fr + sR, c = fc + sC;
+    while (r !== tr || c !== tc) { if (board[r][c]) return false; r += sR; c += sC; }
+    return true;
+}
+
+initGame();
+</script>
+</body>
+</html>

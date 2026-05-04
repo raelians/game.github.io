@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>고급 오목 Master</title>
+  <style>
+    :root {
+      --bg-color: #f0f2f5;
+      --board-color: #e3a857;
+      --accent-color: #28a745;
+      --undo-color: #ffc107;
+      --reset-color: #dc3545;
+      --overlay-bg: rgba(0, 0, 0, 0.8);
+    }
+    body {
+      margin: 0;
+      font-family: 'Pretendard', sans-serif;
+      background-color: var(--bg-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    /* 상단 상태 바 */
+    .status-panel {
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 1.1rem;
+      font-weight: bold;
+      color: #333;
+      background: white;
+      padding: 12px 30px;
+      border-radius: 50px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+
+    .stone-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      box-shadow: inset -2px -2px 4px rgba(0,0,0,0.3), 1px 1px 3px rgba(0,0,0,0.2);
+    }
+    .stone-icon.black { background: #333; transform: scale(1.1); }
+    .stone-icon.white { background: #fff; border: 1px solid #ddd; transform: scale(1.1); }
+    .stone-icon.thinking { animation: pulse 1s infinite; background: #999; }
+
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.2); opacity: 0.6; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    .game-container {
+      position: relative;
+      box-shadow: 0 15px 35px rgba(0,0,0,0.2);
+      border-radius: 12px;
+      overflow: hidden;
+      line-height: 0; /* 캔버스 하단 공백 제거용 */
+    }
+
+    canvas {
+      display: block;
+      background-color: var(--board-color);
+      cursor: crosshair;
+    }
+
+    /* 오버레이 공통 스타일 (글자 겹침 해결) */
+    .overlay {
+      display: none;
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: var(--overlay-bg);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      backdrop-filter: blur(8px);
+      text-align: center;
+      line-height: 1.6; /* 텍스트 겹침 방지를 위해 명시적 지정 */
+    }
+
+    .overlay-title {
+      font-size: 28px;
+      font-weight: bold;
+      color: #fff;
+      margin: 0 0 30px 0; /* 마진 확보 */
+      padding: 0 20px;
+      word-break: keep-all;
+      line-height: 1.4; /* 줄 간격 확보 */
+    }
+
+    .modal-buttons {
+      display: flex;
+      gap: 15px;
+      line-height: normal; /* 버튼 내 텍스트 정렬 정상화 */
+    }
+
+    .controls {
+      margin-top: 25px;
+      display: flex;
+      gap: 15px;
+    }
+
+    button {
+      font-size: 16px;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 10px;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    button:active { transform: translateY(2px); }
+    button:disabled { background: #ccc !important; cursor: not-allowed; }
+
+    .btn-undo { background-color: var(--undo-color); color: #333; }
+    .btn-reset { background-color: var(--reset-color); }
+    .btn-new { background-color: var(--accent-color); }
+    .btn-cancel { background-color: #6c757d; }
+
+    #particles-js { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; }
+  </style>
+</head>
+<body>
+
+  <div class="status-panel">
+    <div id="stone-icon" class="stone-icon black"></div>
+    <span id="status-text">당신의 차례입니다</span>
+  </div>
+  
+  <div class="game-container">
+    <canvas id="board" width="600" height="600"></canvas>
+    
+    <div id="result-overlay" class="overlay">
+      <div id="result-message" class="overlay-title"></div>
+      <div class="modal-buttons">
+        <button class="btn-new" onclick="restartGame()">새 게임 시작하기</button>
+      </div>
+    </div>
+
+    <div id="confirm-overlay" class="overlay">
+      <div class="overlay-title">게임을 초기화하고<br>처음부터 다시 시작할까요?</div>
+      <div class="modal-buttons">
+        <button class="btn-reset" onclick="restartGame()">초기화</button>
+        <button class="btn-cancel" onclick="hideConfirmModal()">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn-undo" id="undo-btn" onclick="undoMove()">한 수 물리기</button>
+    <button class="btn-reset" onclick="showConfirmModal()">판 초기화</button>
+  </div>
+
+  <div id="particles-js"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/particles.js@2.0.0/particles.min.js"></script>
+
+  <script>
+    const canvas = document.getElementById("board");
+    const ctx = canvas.getContext("2d");
+    const statusText = document.getElementById("status-text");
+    const stoneIcon = document.getElementById("stone-icon");
+    const undoBtn = document.getElementById("undo-btn");
+    const confirmOverlay = document.getElementById("confirm-overlay");
+
+    const size = 15;
+    const padding = 40;
+    const boardSize = canvas.width - (padding * 2);
+    const cell = boardSize / (size - 1);
+    
+    let board = Array.from({ length: size }, () => Array(size).fill(0));
+    let history = []; 
+    let gameEnded = false;
+    let isAiThinking = false;
+
+    function init() {
+      drawBoard();
+      updateStatusUI(1);
+    }
+
+    function drawBoard() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#e3a857";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = "#444";
+      ctx.lineWidth = 1;
+      for (let i = 0; i < size; i++) {
+        ctx.beginPath();
+        ctx.moveTo(padding, padding + i * cell);
+        ctx.lineTo(canvas.width - padding, padding + i * cell);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(padding + i * cell, padding);
+        ctx.lineTo(padding + i * cell, canvas.height - padding);
+        ctx.stroke();
+      }
+
+      [3, 7, 11].forEach(r => [3, 7, 11].forEach(c => {
+        ctx.beginPath(); ctx.arc(padding + c * cell, padding + r * cell, 4, 0, Math.PI * 2);
+        ctx.fillStyle = "#333"; ctx.fill();
+      }));
+
+      board.forEach((row, y) => row.forEach((p, x) => { if (p !== 0) drawStone(x, y, p); }));
+
+      if (history.length > 0) {
+        const last = history[history.length - 1];
+        ctx.beginPath();
+        ctx.arc(padding + last.x * cell, padding + last.y * cell, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "#ff4757"; ctx.fill();
+      }
+    }
+
+    function drawStone(x, y, player) {
+      const px = padding + x * cell;
+      const py = padding + y * cell;
+      ctx.save();
+      ctx.shadowBlur = 4; ctx.shadowColor = "rgba(0,0,0,0.3)"; ctx.shadowOffsetY = 2;
+      ctx.beginPath(); ctx.arc(px, py, cell / 2.3, 0, Math.PI * 2);
+      const grad = ctx.createRadialGradient(px - 5, py - 5, 2, px, py, cell / 2);
+      if (player === 1) { grad.addColorStop(0, "#444"); grad.addColorStop(1, "#000"); }
+      else { grad.addColorStop(0, "#fff"); grad.addColorStop(1, "#ddd"); }
+      ctx.fillStyle = grad; ctx.fill(); ctx.restore();
+    }
+
+    canvas.addEventListener("click", (e) => {
+      if (gameEnded || isAiThinking || confirmOverlay.style.display === "flex") return;
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.round((e.clientX - rect.left - padding) / cell);
+      const y = Math.round((e.clientY - rect.top - padding) / cell);
+
+      if (x >= 0 && x < size && y >= 0 && y < size && board[y][x] === 0) {
+        placeMove(x, y, 1);
+        if (checkWin(x, y, 1)) { showResult("🎉 플레이어 승리!"); return; }
+        startAiTurn();
+      }
+    });
+
+    function placeMove(x, y, player) {
+      board[y][x] = player;
+      history.push({x, y, player});
+      drawBoard();
+      updateUndoButton();
+    }
+
+    function startAiTurn() {
+      isAiThinking = true;
+      updateStatusUI("ai");
+      setTimeout(() => {
+        aiMove();
+        isAiThinking = false;
+        if (!gameEnded) updateStatusUI(1);
+      }, 600);
+    }
+
+    function updateStatusUI(turn) {
+      stoneIcon.className = "stone-icon";
+      if (turn === 1) {
+        stoneIcon.classList.add("black");
+        statusText.innerText = "당신의 차례입니다";
+      } else if (turn === "ai") {
+        stoneIcon.classList.add("thinking");
+        statusText.innerText = "AI가 생각 중입니다";
+      }
+    }
+
+    function showConfirmModal() { if (!gameEnded) confirmOverlay.style.display = "flex"; }
+    function hideConfirmModal() { confirmOverlay.style.display = "none"; }
+
+    function restartGame() {
+      board = Array.from({ length: size }, () => Array(size).fill(0));
+      history = []; gameEnded = false; isAiThinking = false;
+      document.getElementById("result-overlay").style.display = "none";
+      confirmOverlay.style.display = "none";
+      document.getElementById("particles-js").innerHTML = "";
+      updateStatusUI(1);
+      init();
+    }
+
+    function undoMove() {
+      if (history.length < 2 || gameEnded || isAiThinking) return;
+      const step2 = history.pop(); board[step2.y][step2.x] = 0;
+      const step1 = history.pop(); board[step1.y][step1.x] = 0;
+      drawBoard(); updateUndoButton(); updateStatusUI(1);
+    }
+
+    function updateUndoButton() { undoBtn.disabled = history.length < 2 || gameEnded || isAiThinking; }
+
+    function aiMove() {
+      let maxS = -1; let moves = [];
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          if (board[y][x] !== 0) continue;
+          const a = evaluate(x, y, 2); const d = evaluate(x, y, 1);
+          let total = a + (d * 1.1);
+          if (total > maxS) { maxS = total; moves = [{x, y}]; }
+          else if (total === maxS) moves.push({x, y});
+        }
+      }
+      const m = moves[Math.floor(Math.random() * moves.length)];
+      placeMove(m.x, m.y, 2);
+      if (checkWin(m.x, m.y, 2)) showResult("💥 AI 승리!");
+    }
+
+    function evaluate(x, y, p) {
+      let score = 0; const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+      for (let [dx, dy] of dirs) {
+        let count = 1, open = 0;
+        for (let dir of [-1, 1]) {
+          for (let i = 1; i < 5; i++) {
+            const nx = x + dx*i*dir, ny = y + dy*i*dir;
+            if (nx>=0 && nx<size && ny>=0 && ny<size) {
+              if (board[ny][nx] === p) count++;
+              else if (board[ny][nx] === 0) { open++; break; }
+              else break;
+            } else break;
+          }
+        }
+        if (count >= 5) score += 1000000;
+        else if (count === 4) score += (open === 2) ? 50000 : 10000;
+        else if (count === 3) score += (open === 2) ? 5000 : 500;
+        else if (count === 2) score += (open === 2) ? 500 : 50;
+      }
+      return score;
+    }
+
+    function checkWin(x, y, p) {
+      const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+      for (let [dx, dy] of dirs) {
+        let count = 1;
+        for (let dir of [-1, 1]) {
+          let nx = x, ny = y;
+          while(true) {
+            nx += dx*dir; ny += dy*dir;
+            if (nx<0||ny<0||nx>=size||ny>=size||board[ny][nx]!==p) break;
+            count++;
+          }
+        }
+        if (count >= 5) return true;
+      }
+      return false;
+    }
+
+    function showResult(msg) {
+      gameEnded = true;
+      const overlay = document.getElementById("result-overlay");
+      document.getElementById("result-message").innerText = msg;
+      overlay.style.display = "flex";
+      updateUndoButton();
+      particlesJS("particles-js", { "particles": { "number": { "value": 150 }, "color": { "value": ["#ffffff", "#ffc107", "#28a745"] }, "move": { "enable": true, "speed": 5 } } });
+    }
+
+    init();
+  </script>
+</body>
+</html>

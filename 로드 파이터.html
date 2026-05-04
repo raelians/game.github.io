@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Road Fighter - High Detail Edition</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: 'Courier New', monospace; }
+        canvas { background: #333; border: 4px solid #444; box-shadow: 0 0 60px rgba(0,0,0,1); cursor: none; }
+        
+        #ui { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); color: #fff; background: rgba(0,0,0,0.85); padding: 15px 35px; border-radius: 50px; display: flex; gap: 25px; border: 1px solid #666; z-index: 10; pointer-events: none; }
+        .stat { text-align: center; min-width: 70px; }
+        .label { font-size: 11px; color: #bbb; margin-bottom: 2px; text-transform: uppercase; }
+        .val { font-size: 20px; font-weight: bold; color: #0f0; text-shadow: 0 0 10px rgba(0,255,0,0.5); }
+        #level-val { color: #ffeb3b; }
+
+        #side-buttons { position: absolute; right: 20px; top: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 20; }
+        .side-btn { background: rgba(255,255,255,0.1); color: white; border: 1px solid #666; padding: 10px 15px; border-radius: 10px; cursor: pointer; font-family: inherit; font-size: 12px; transition: 0.2s; }
+        .side-btn:hover { background: rgba(255,255,255,0.3); }
+
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .modal { background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(20px); border: 2px solid rgba(255,255,255,0.2); padding: 50px; border-radius: 40px; text-align: center; color: white; width: 380px; }
+        h2 { font-size: 45px; margin: 0; color: #ff3d00; text-transform: uppercase; }
+        button.main-btn { margin-top: 20px; padding: 15px 45px; background: #ff3d00; color: white; border: none; border-radius: 30px; font-family: inherit; font-size: 20px; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        button.main-btn:hover { transform: scale(1.1); background: #ff6e40; }
+
+        .fuel-mini { width: 120px; height: 14px; background: #111; border-radius: 7px; margin-top: 5px; border: 1px solid #555; overflow: hidden; }
+        #fuel-fill { width: 100%; height: 100%; background: #0f0; }
+        .flash { animation: flash-white 0.4s; }
+        @keyframes flash-white { 0% { background: #fff; } 100% { background: #0f0; } }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div class="stat"><div class="label">LV</div><div class="val" id="level-val">1</div></div>
+        <div class="stat"><div class="label">STAGE</div><div class="val" id="stage">DAY</div></div>
+        <div class="stat"><div class="label">SCORE</div><div class="val" id="score">0</div></div>
+        <div class="stat"><div class="label">FUEL</div><div class="fuel-mini"><div id="fuel-fill"></div></div></div>
+    </div>
+
+    <div id="side-buttons">
+        <button class="side-btn" onclick="togglePause()">PAUSE (P)</button>
+        <button class="side-btn" onclick="resetGame()">RESTART (R)</button>
+    </div>
+
+    <div id="gameover-overlay" class="overlay">
+        <div class="modal">
+            <h2 id="modal-title">RETIRED</h2>
+            <p style="font-size: 20px;">LEVEL <span id="final-level">1</span><br>SCORE <span id="final-score">0</span></p>
+            <button class="main-btn" onclick="resetGame()">TRY AGAIN</button>
+        </div>
+    </div>
+
+    <div id="pause-overlay" class="overlay">
+        <div class="modal">
+            <h2 style="color:#ffeb3b">PAUSED</h2>
+            <p>Press P or Click to Resume</p>
+            <button class="main-btn" onclick="togglePause()">RESUME</button>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+window.onload = function() {
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 500; canvas.height = 800;
+
+    let score, speed, energy, frame, gameOver, isPaused, slipping, level;
+    let roadX, targetRoadX, enemies, scenery, items, keys = {};
+    const ROAD_W = 280;
+    const player = { x: 230, y: 650, w: 46, h: 72 };
+
+    function resetGame() {
+        score = 0; speed = 0; energy = 100; frame = 0;
+        gameOver = false; isPaused = false; slipping = 0; level = 1;
+        roadX = 110; targetRoadX = 110;
+        enemies = []; scenery = []; items = []; keys = {};
+        document.getElementById('gameover-overlay').style.display = 'none';
+        document.getElementById('pause-overlay').style.display = 'none';
+        animate(); 
+    }
+
+    window.onkeydown = e => {
+        if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
+        if (e.code === 'KeyR') resetGame();
+        keys[e.code] = true;
+    };
+    window.onkeyup = e => keys[e.code] = false;
+
+    function togglePause() {
+        if (gameOver) return;
+        isPaused = !isPaused;
+        document.getElementById('pause-overlay').style.display = isPaused ? 'flex' : 'none';
+        if (!isPaused) animate();
+    }
+
+    function drawRoundedRect(c, x, y, w, h, r) {
+        c.beginPath(); c.moveTo(x+r, y); c.lineTo(x+w-r, y); c.quadraticCurveTo(x+w, y, x+w, y+r);
+        c.lineTo(x+w, y+h-r); c.quadraticCurveTo(x+w, y+h, x+w-r, y+h); c.lineTo(x+r, y+h);
+        c.quadraticCurveTo(x, y+h, x, y+h-r); c.lineTo(x, y+r); c.quadraticCurveTo(x, y, x+r, y);
+        c.closePath(); c.fill();
+    }
+
+    function drawBuilding(x, y, night) {
+        ctx.fillStyle = night ? "#0D1421" : "#455A64";
+        ctx.fillRect(x, y, 50, 90);
+        for(let i=0; i<2; i++) {
+            for(let j=0; j<4; j++) {
+                if (night) {
+                    ctx.fillStyle = (Math.sin(frame*0.1 + (i+j)*10) > 0) ? "#FFD54F" : "#111";
+                } else {
+                    ctx.fillStyle = "#90A4AE";
+                }
+                ctx.fillRect(x + 10 + i * 22, y + 12 + j * 20, 8, 8);
+            }
+        }
+    }
+
+    // --- 적 차량 드로잉 함수 (디테일 강화) ---
+    function drawEnemy(en) {
+        ctx.fillStyle = en.color;
+        
+        if (en.type === 'truck') {
+            // [트럭] 헤비 듀티 스타일
+            drawRoundedRect(ctx, en.x, en.y, en.w, en.h, 4);
+            // 앞유리
+            ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(en.x+6, en.y+15, en.w-12, 18);
+            // 그릴 및 범퍼 디테일
+            ctx.fillStyle = "#AAA"; ctx.fillRect(en.x+5, en.y+3, en.w-10, 8); // 상단 램프바
+            ctx.fillStyle = "#444"; ctx.fillRect(en.x+5, en.y+en.h-10, en.w-10, 6); // 리어 범퍼
+            // 바퀴
+            ctx.fillStyle = "#222"; [0, en.w-8].forEach(x => [20, en.h-25].forEach(y => ctx.fillRect(en.x+x, en.y+y, 8, 16)));
+            // 리어 램프 (빨강)
+            ctx.fillStyle = "#E53935"; ctx.fillRect(en.x+8, en.y+en.h-5, 6, 3); ctx.fillRect(en.x+en.w-14, en.y+en.h-5, 6, 3);
+        } else {
+            // [승용차] 스포츠카 스타일
+            drawRoundedRect(ctx, en.x, en.y, en.w, en.h, 12);
+            // 공기 흡입구/그릴 디테일
+            ctx.fillStyle = "#222"; ctx.fillRect(en.x+8, en.y+6, en.w-16, 4); 
+            // 앞유리 및 루프 라인
+            ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(en.x+8, en.y+12, en.w-16, 16); 
+            ctx.fillStyle = "rgba(255,255,255,0.1)"; ctx.fillRect(en.x+10, en.y+20, en.w-20, 4); // 유리창 반사
+            // 리어 스포일러 (윙)
+            ctx.fillStyle = "#333"; ctx.fillRect(en.x+4, en.y+en.h-8, en.w-8, 4); 
+            ctx.fillStyle = en.color; ctx.fillRect(en.x+10, en.y+en.h-8, en.w-20, 4); // 스포일러 연결부
+            // 바퀴
+            ctx.fillStyle = "#222"; [0, en.w-6].forEach(x => [20, en.h-28].forEach(y => ctx.fillRect(en.x+x, en.y+y, 6, 16)));
+        }
+        
+        // 전조등 (트윈 헤드라이트 스타일)
+        ctx.fillStyle = "#FFEB3B"; 
+        ctx.fillRect(en.x+6, en.y+2, 6, 4); ctx.fillRect(en.x+14, en.y+2, 4, 4); 
+        ctx.fillRect(en.x+en.w-12, en.y+2, 6, 4); ctx.fillRect(en.x+en.w-18, en.y+2, 4, 4);
+    }
+
+    function animate() {
+        if (gameOver || isPaused) return;
+        frame++;
+        
+        level = Math.min(10, Math.floor(score / 5000) + 1);
+        const spawnRate = Math.max(40, 85 - (level * 4));
+        if (keys['ArrowUp']) speed += 0.22; else speed -= 0.35;
+        speed = Math.max(0, Math.min(speed, 10 + (level * 1.5)));
+        if (speed > 0) { energy -= 0.055; score += Math.floor(speed/4); }
+        if (energy <= 0) return endGame("OUT OF FUEL");
+
+        const fuelBar = document.getElementById('fuel-fill');
+        fuelBar.style.width = Math.max(0, energy) + "%";
+        fuelBar.style.background = energy < 30 ? "#f00" : "#0f0";
+        document.getElementById('level-val').innerText = level;
+        document.getElementById('score').innerText = score;
+
+        roadX += (targetRoadX - roadX) * (0.015 + (level * 0.004));
+        if (frame % 140 === 0) targetRoadX = 50 + Math.random()*(500 - ROAD_W - 100);
+
+        if (frame % 25 === 0) scenery.push({ xRel: Math.random()>0.5 ? -75 : ROAD_W+25, y: -100, type: Math.random()>0.5 ? 'tree' : 'bldg' });
+        if (frame % 90 === 0) items.push({ xRel: 25 + Math.random()*(ROAD_W-50), y: -100, type: Math.random()>0.8 ? 'oil' : 'fuel' });
+        if (frame % Math.floor(spawnRate) === 0) {
+            let type = Math.random() < 0.25 ? 'truck' : 'car';
+            enemies.push({ xRel: 20+Math.random()*(ROAD_W-60), y: -150, w: type==='truck'?48:42, h: type==='truck'?95:72, type: type, baseSpeed: 0.8 + (level * 0.4) + Math.random()*1.5, color: `hsl(${Math.random()*360},70%,50%)` });
+        }
+
+        const night = (score % 8000 > 4000); // 4000점부터 밤 시작
+        document.getElementById('stage').innerText = night ? "NIGHT" : "DAY";
+        ctx.fillStyle = night ? "#050B14" : "#1B5E20";
+        ctx.fillRect(0, 0, 500, 800);
+        ctx.fillStyle = night ? "#111" : "#333";
+        ctx.fillRect(roadX, 0, ROAD_W, 800);
+
+        ctx.strokeStyle = night ? "#222" : "#EEE";
+        ctx.setLineDash([30, 30]); ctx.lineDashOffset = -frame * (speed + 3);
+        ctx.beginPath(); ctx.moveTo(roadX+ROAD_W/2, 0); ctx.lineTo(roadX+ROAD_W/2, 800); ctx.stroke();
+        ctx.setLineDash([]);
+
+        const moveY = speed + 2;
+        scenery.forEach(s => { 
+            s.y += moveY; s.x = roadX + s.xRel; 
+            if(s.type === 'tree') {
+                ctx.fillStyle = "#4E342E"; ctx.fillRect(s.x+18, s.y+22, 6, 22);
+                ctx.fillStyle = night ? "#062108" : "#2E7D32"; ctx.beginPath(); ctx.arc(s.x+21, s.y+10, 18, 0, Math.PI*2); ctx.fill();
+            } else drawBuilding(s.x, s.y, night);
+        });
+
+        items.forEach((it, i) => {
+            it.y += moveY; it.x = roadX + it.xRel;
+            if (player.x < it.x + 35 && player.x + player.w > it.x && player.y < it.y + 45 && player.y + player.h > it.y) {
+                if(it.type === 'fuel') { energy = Math.min(100, energy + 45); fuelBar.classList.remove('flash'); void fuelBar.offsetWidth; fuelBar.classList.add('flash'); }
+                else slipping = 45;
+                items.splice(i, 1);
+            }
+            if(it.type === 'fuel'){ 
+                ctx.fillStyle = "#E53935"; drawRoundedRect(ctx, it.x, it.y, 35, 45, 5); 
+                ctx.fillStyle = "#fff"; ctx.font = "bold 22px Arial"; ctx.fillText("F", it.x+10, it.y+32); 
+            } else { 
+                ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.beginPath(); ctx.ellipse(it.x+17, it.y+22, 25, 12, 0, 0, Math.PI*2); ctx.fill(); 
+            }
+        });
+
+        enemies.forEach((en, i) => {
+            en.y += en.baseSpeed + speed + 1; en.x = roadX + en.xRel;
+            if (player.x + 8 < en.x + en.w - 8 && player.x + player.w - 8 > en.x + 8 && player.y + 10 < en.y + en.h - 10 && player.y + player.h - 10 > en.y + 8) endGame("CRASH!");
+            drawEnemy(en); // 디테일 강화된 그리기 함수 호출
+        });
+
+        let mx = 0; if (keys['ArrowLeft']) mx -= 7.5; if (keys['ArrowRight']) mx += 7.5;
+        if (slipping > 0) { mx = Math.sin(frame*0.4)*18; slipping--; }
+        player.x += mx;
+        if (player.x < roadX - 15 || player.x + player.w > roadX + ROAD_W + 15) if (speed > 5) return endGame("OFF ROAD!");
+
+        // 캐릭터 디테일
+        ctx.fillStyle = "#FF3D00"; drawRoundedRect(ctx, player.x, player.y, player.w, player.h, 15);
+        ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(player.x+14, player.y+24, 11, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(player.x+32, player.y+24, 11, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = "black"; ctx.beginPath(); ctx.arc(player.x+14, player.y+22, 5, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(player.x+32, player.y+22, 5, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = "#111"; [0, player.w-6].forEach(x => [18, player.h-28].forEach(y => ctx.fillRect(player.x+x, player.y+y, 6, 16)));
+
+        if (night) {
+            ctx.save();
+            const dark = document.createElement('canvas'); dark.width = 500; dark.height = 800;
+            const dctx = dark.getContext('2d'); dctx.fillStyle = "rgba(0, 0, 0, 0.9)"; dctx.fillRect(0, 0, 500, 800);
+            dctx.globalCompositeOperation = 'destination-out';
+            dctx.beginPath(); dctx.moveTo(player.x+player.w/2, player.y+20); dctx.lineTo(player.x-140, player.y-480); dctx.lineTo(player.x+185, player.y-480); dctx.closePath();
+            const g1 = dctx.createLinearGradient(0, player.y, 0, player.y-480); g1.addColorStop(0, "white"); g1.addColorStop(1, "transparent");
+            dctx.fillStyle = g1; dctx.fill();
+            const g2 = dctx.createRadialGradient(player.x+player.w/2, player.y+35, 30, player.x+player.w/2, player.y+35, 200); g2.addColorStop(0, "white"); g2.addColorStop(1, "transparent");
+            dctx.fillStyle = g2; dctx.beginPath(); dctx.arc(player.x+player.w/2, player.y+35, 200, 0, Math.PI*2); dctx.fill();
+            ctx.drawImage(dark, 0, 0); ctx.restore();
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    function endGame(msg) {
+        gameOver = true;
+        document.getElementById('gameover-overlay').style.display = 'flex';
+        document.getElementById('modal-title').innerText = msg;
+        document.getElementById('final-score').innerText = score;
+        document.getElementById('final-level').innerText = level;
+    }
+
+    window.resetGame = resetGame;
+    window.togglePause = togglePause;
+    resetGame();
+};
+</script>
+</body>
+</html>

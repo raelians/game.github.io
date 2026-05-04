@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>랜덤 미로 찾기 - 대형 판</title>
+    <style>
+        :root { --main-bg: #1a1a2e; --maze-bg: #16213e; --wall-color: #0f3460; --player-color: #4ecca3; --point-color: #e94560; }
+        body { background: var(--main-bg); color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; font-family: 'Segoe UI', sans-serif; }
+        
+        .header { width: 100%; max-width: 700px; display: flex; flex-direction: column; align-items: center; margin-bottom: 20px; gap: 15px; }
+        .title-row { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 0 10px; }
+        .difficulty-row { display: flex; gap: 12px; }
+        
+        button { border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; font-family: 'Segoe UI'; }
+        .btn-diff { background: #16213e; color: var(--player-color); border: 2px solid var(--player-color); }
+        .btn-diff.active { background: var(--player-color); color: var(--main-bg); }
+        .btn-reset { background: var(--point-color); color: white; box-shadow: 0 4px 10px rgba(233, 69, 96, 0.3); }
+        .btn-reset:hover { background: #ff4d6d; transform: translateY(-2px); }
+        
+        #maze-container { 
+            position: relative; background: var(--maze-bg); 
+            border: 8px solid var(--wall-color); border-radius: 12px; 
+            padding: 5px; box-shadow: 0 20px 50px rgba(0,0,0,0.6); 
+        }
+        canvas { display: block; image-rendering: pixelated; } /* 도트 느낌을 살려 더 선명하게 */
+        
+        .status { margin-top: 20px; font-size: 22px; color: var(--player-color); font-weight: bold; text-shadow: 0 0 10px rgba(78, 204, 163, 0.5); }
+        .guide { margin-top: 8px; font-size: 15px; color: #95a5a6; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="title-row">
+        <div style="font-size: 28px; font-weight: bold; letter-spacing: 2px;">🧭 MAZE RUNNER PRO</div>
+        <button class="btn-reset" onclick="initGame()">새 미로 생성</button>
+    </div>
+    <div class="difficulty-row">
+        <button class="btn-diff" onclick="changeDifficulty(19, this)">쉬움 (19x19)</button>
+        <button class="btn-diff active" onclick="changeDifficulty(35, this)">보통 (35x35)</button>
+        <button class="btn-diff" onclick="changeDifficulty(55, this)">어려움 (55x55)</button>
+    </div>
+</div>
+
+<div id="maze-container">
+    <canvas id="mazeCanvas"></canvas>
+</div>
+
+<div class="status" id="status">탈출구를 찾으세요!</div>
+<div class="guide">방향키(↑ ↓ ← →)를 사용해 미로를 탈출하세요.</div>
+
+<script>
+const canvas = document.getElementById('mazeCanvas');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+
+// 판의 최대 크기 설정 (화면에 맞게 자동 조정)
+const MAX_VIEW_SIZE = 650;
+let COLS = 35; 
+let ROWS = 35;
+let TILE_SIZE = MAX_VIEW_SIZE / COLS;
+
+let maze = [];
+let player = { x: 1, y: 1 };
+let goal = { x: 0, y: 0 };
+
+function changeDifficulty(size, btn) {
+    COLS = ROWS = size;
+    TILE_SIZE = MAX_VIEW_SIZE / size;
+    
+    document.querySelectorAll('.btn-diff').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    
+    initGame();
+}
+
+function generateMaze() {
+    maze = Array.from({ length: ROWS }, () => Array(COLS).fill(1));
+    goal = { x: COLS - 2, y: ROWS - 2 };
+
+    function walk(x, y) {
+        maze[y][x] = 0;
+        const dirs = [[0, -2], [0, 2], [-2, 0], [2, 0]].sort(() => Math.random() - 0.5);
+        for (let [dx, dy] of dirs) {
+            let nx = x + dx, ny = y + dy;
+            if (nx > 0 && nx < COLS - 1 && ny > 0 && ny < ROWS - 1 && maze[ny][nx] === 1) {
+                maze[y + dy / 2][x + dx / 2] = 0;
+                walk(nx, ny);
+            }
+        }
+    }
+    walk(1, 1);
+}
+
+function draw() {
+    canvas.width = COLS * TILE_SIZE;
+    canvas.height = ROWS * TILE_SIZE;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            if (maze[y][x] === 1) {
+                ctx.fillStyle = '#0f3460';
+                // 벽 사이에 아주 미세한 간격을 주어 격자감을 살림
+                ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE + 0.5, TILE_SIZE + 0.5);
+            }
+        }
+    }
+
+    // 도착점
+    ctx.font = `${TILE_SIZE * 0.8}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🚩', goal.x * TILE_SIZE + TILE_SIZE/2, goal.y * TILE_SIZE + TILE_SIZE/2);
+
+    // 플레이어
+    ctx.fillStyle = '#4ecca3';
+    ctx.shadowBlur = 15; ctx.shadowColor = '#4ecca3';
+    ctx.beginPath();
+    ctx.arc(player.x * TILE_SIZE + TILE_SIZE/2, player.y * TILE_SIZE + TILE_SIZE/2, TILE_SIZE/2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+}
+
+function initGame() {
+    player = { x: 1, y: 1 };
+    statusEl.innerText = "탈출구를 찾으세요!";
+    statusEl.style.color = "#4ecca3";
+    generateMaze();
+    draw();
+}
+
+window.addEventListener('keydown', (e) => {
+    if (statusEl.innerText.includes("성공")) return;
+
+    let nx = player.x, ny = player.y;
+    if (e.key === 'ArrowUp') ny--;
+    if (e.key === 'ArrowDown') ny++;
+    if (e.key === 'ArrowLeft') nx--;
+    if (e.key === 'ArrowRight') nx++;
+
+    if (maze[ny] && maze[ny][nx] === 0) {
+        player.x = nx; player.y = ny;
+        draw();
+        if (player.x === goal.x && player.y === goal.y) {
+            statusEl.innerText = "🎉 미로 탈출 성공! 대단한 집중력입니다!";
+            statusEl.style.color = "#f9ed69";
+        }
+    }
+    // 스크롤 방지
+    if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].indexOf(e.code) > -1) {
+        e.preventDefault();
+    }
+});
+
+initGame();
+</script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>그래픽 로또 추첨기</title>
+    <style>
+        :root {
+            --bg-color: #f8f9fa;
+            --container-bg: #ffffff;
+            --accent: #007bff;
+        }
+        body {
+            margin: 0; background-color: var(--bg-color);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            height: 100vh; font-family: 'Pretendard', sans-serif;
+        }
+        .container {
+            text-align: center; background: var(--container-bg);
+            padding: 40px; border-radius: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            width: 90%; max-width: 600px;
+        }
+        h1 { color: #333; margin-bottom: 30px; font-weight: 800; }
+        
+        /* 공들이 배치될 영역 */
+        #ball-container {
+            display: flex; justify-content: center; gap: 15px;
+            min-height: 100px; margin-bottom: 40px; flex-wrap: wrap;
+        }
+
+        /* 로또 공 스타일 */
+        .ball {
+            width: 60px; height: 60px;
+            border-radius: 50%; display: flex; align-items: center;
+            justify-content: center; font-size: 24px; font-weight: bold;
+            color: white; text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+            box-shadow: inset -5px -5px 10px rgba(0,0,0,0.2), 5px 5px 15px rgba(0,0,0,0.1);
+            animation: bounceIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        @keyframes bounceIn {
+            0% { transform: scale(0) rotate(-180deg); opacity: 0; }
+            100% { transform: scale(1) rotate(0); opacity: 1; }
+        }
+
+        /* 로또 색상 규정 */
+        .color-yellow { background: radial-gradient(circle at 30% 30%, #fbc531, #e1b12c); } /* 1~10 */
+        .color-blue   { background: radial-gradient(circle at 30% 30%, #487eb0, #40739e); } /* 11~20 */
+        .color-red    { background: radial-gradient(circle at 30% 30%, #e84118, #c23616); } /* 21~30 */
+        .color-gray   { background: radial-gradient(circle at 30% 30%, #7f8c8d, #718093); } /* 31~40 */
+        .color-green  { background: radial-gradient(circle at 30% 30%, #4cd137, #44bd32); } /* 41~45 */
+
+        /* 컨트롤 버튼 */
+        .btn-draw {
+            padding: 18px 45px; font-size: 20px; font-weight: bold;
+            background-color: var(--accent); color: white;
+            border: none; border-radius: 50px; cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 10px 20px rgba(0,123,255,0.3);
+        }
+        .btn-draw:hover { transform: translateY(-3px); box-shadow: 0 15px 30px rgba(0,123,255,0.4); }
+        .btn-draw:active { transform: translateY(0); }
+        .btn-draw:disabled { background-color: #ccc; cursor: not-allowed; box-shadow: none; }
+
+        .history {
+            margin-top: 30px; color: #888; font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>LOTTO 6/45</h1>
+        
+        <div id="ball-container">
+            </div>
+
+        <button class="btn-draw" id="draw-btn" onclick="generateLotto()">번호 생성하기</button>
+        
+        <div class="history" id="history-msg">행운의 번호를 뽑아보세요!</div>
+    </div>
+
+    <script>
+        const ballContainer = document.getElementById('ball-container');
+        const drawBtn = document.getElementById('draw-btn');
+        const historyMsg = document.getElementById('history-msg');
+
+        function getBallColorClass(num) {
+            if (num <= 10) return 'color-yellow';
+            if (num <= 20) return 'color-blue';
+            if (num <= 30) return 'color-red';
+            if (num <= 40) return 'color-gray';
+            return 'color-green';
+        }
+
+        async function generateLotto() {
+            // 초기화
+            ballContainer.innerHTML = '';
+            drawBtn.disabled = true;
+            historyMsg.innerText = "번호를 추첨 중입니다...";
+
+            // 1~45 번호 섞기
+            const numbers = [];
+            while(numbers.length < 6) {
+                const rand = Math.floor(Math.random() * 45) + 1;
+                if(!numbers.includes(rand)) {
+                    numbers.push(rand);
+                }
+            }
+
+            // 오름차순 정렬 (실제 로또 느낌)
+            numbers.sort((a, b) => a - b);
+
+            // 공을 하나씩 시간차를 두고 생성 (애니메이션 효과)
+            for (let i = 0; i < numbers.length; i++) {
+                await new Promise(resolve => setTimeout(resolve, 500)); // 0.5초 간격
+                
+                const num = numbers[i];
+                const ball = document.createElement('div');
+                ball.className = `ball ${getBallColorClass(num)}`;
+                ball.innerText = num;
+                
+                ballContainer.appendChild(ball);
+            }
+
+            drawBtn.disabled = false;
+            historyMsg.innerText = "이번 주의 행운을 빌어요! ✨";
+        }
+    </script>
+</body>
+</html>

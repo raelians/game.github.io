@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>고급 바둑 Master</title>
+  <style>
+    :root {
+      --bg-color: #f0f2f5;
+      --board-color: #f3cc8f;
+      --accent-color: #2c3e50;
+      --undo-color: #ffc107;
+      --reset-color: #dc3545;
+      --overlay-bg: rgba(0, 0, 0, 0.85);
+    }
+    body {
+      margin: 0;
+      font-family: 'Pretendard', sans-serif;
+      background-color: var(--bg-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    /* 상단 상태 바 */
+    .status-panel {
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 1.1rem;
+      font-weight: bold;
+      color: #333;
+      background: white;
+      padding: 12px 30px;
+      border-radius: 50px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+
+    .stone-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      box-shadow: inset -2px -2px 4px rgba(0,0,0,0.3), 1px 1px 3px rgba(0,0,0,0.2);
+    }
+    .stone-icon.black { background: #333; transform: scale(1.1); }
+    .stone-icon.white { background: #fff; border: 1px solid #ddd; transform: scale(1.1); }
+    .stone-icon.thinking { animation: pulse 1s infinite; background: #999; }
+
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.2); opacity: 0.6; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    .game-container {
+      position: relative;
+      box-shadow: 0 15px 45px rgba(0,0,0,0.2);
+      border-radius: 12px;
+      overflow: hidden;
+      line-height: 0;
+      border: 8px solid #b7905a;
+    }
+
+    canvas {
+      display: block;
+      background-color: var(--board-color);
+      background-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgdmlld0JveD0iMCAwIDQwIDQwIj48ZyBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNiYTkzNWUiIGZpbGwtb3BhY2l0eT0iMC4xNSI+PHBhdGggZD0iTTAgMGg0MHY0MEgwVjB6bTIwIDIwaDIwdjIwSDIWMjB6TTAgMjBoMjB2MjBIMFYyMHoyMCAwaDIwdjIwSDIwVjB6Ii8+PC9nPjwvZz48L3N2Zz4=');
+      cursor: crosshair;
+    }
+
+    .overlay {
+      display: flex;
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: var(--overlay-bg);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      backdrop-filter: blur(8px);
+      text-align: center;
+    }
+
+    .overlay-title {
+      font-size: 32px;
+      font-weight: bold;
+      color: #fff;
+      margin-bottom: 30px;
+      line-height: 1.4;
+    }
+
+    .modal-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+
+    .controls {
+      margin-top: 25px;
+      display: flex;
+      gap: 15px;
+    }
+
+    button {
+      font-size: 16px;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 10px;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s;
+      min-width: 200px;
+    }
+    button:active { transform: translateY(2px); }
+
+    .btn-ai { background-color: var(--accent-color); }
+    .btn-pvp { background-color: #fff; color: #333; }
+    .btn-resume { background-color: #28a745; }
+    .btn-reset { background-color: var(--reset-color); }
+
+    #particles-js { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; }
+  </style>
+</head>
+<body>
+
+  <div class="status-panel">
+    <div id="stone-icon" class="stone-icon black"></div>
+    <span id="status-text">차례를 기다리는 중...</span>
+  </div>
+  
+  <div class="game-container">
+    <canvas id="goCanvas" width="600" height="600"></canvas>
+    
+    <div id="start-overlay" class="overlay">
+      <div class="overlay-title">CLASSIC GO<br><span style="font-size:18px; font-weight:normal; color:#aaa;">모드를 선택하세요</span></div>
+      <div class="modal-buttons">
+        <button class="btn-ai" onclick="startGame('ai')">인공지능 대결</button>
+        <button class="btn-pvp" onclick="startGame('pvp')">친구와 대결</button>
+      </div>
+    </div>
+
+    <div id="pause-overlay" class="overlay" style="display:none;">
+      <div class="overlay-title">PAUSED</div>
+      <div class="modal-buttons">
+        <button class="btn-resume" onclick="togglePause()">대국 재개</button>
+        <button class="btn-reset" onclick="location.reload()">처음으로</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn-reset" style="background:#6c757d; min-width:120px;" onclick="togglePause()">일시정지 (P)</button>
+  </div>
+
+  <div id="particles-js"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/particles.js@2.0.0/particles.min.js"></script>
+
+  <script>
+    const canvas = document.getElementById("goCanvas");
+    const ctx = canvas.getContext("2d");
+    const statusText = document.getElementById("status-text");
+    const stoneIcon = document.getElementById("stone-icon");
+    const startOverlay = document.getElementById("start-overlay");
+    const pauseOverlay = document.getElementById("pause-overlay");
+
+    const size = 19;
+    const padding = 50;
+    const cellSize = (canvas.width - padding * 2) / (size - 1);
+    const stoneRadius = cellSize * 0.46;
+    
+    let board, currentTurn, gameMode, isPaused, isAiThinking;
+
+    function startGame(mode) {
+      board = Array.from({ length: size }, () => Array(size).fill(0));
+      currentTurn = 1;
+      gameMode = mode;
+      isPaused = false;
+      isAiThinking = false;
+      startOverlay.style.display = "none";
+      updateStatusUI(1);
+      drawBoard();
+    }
+
+    function drawBoard() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // 격자선
+      ctx.strokeStyle = "#8d6e63";
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < size; i++) {
+        ctx.beginPath();
+        ctx.moveTo(padding, padding + i * cellSize);
+        ctx.lineTo(canvas.width - padding, padding + i * cellSize);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(padding + i * cellSize, padding);
+        ctx.lineTo(padding + i * cellSize, canvas.height - padding);
+        ctx.stroke();
+      }
+
+      // 화점
+      ctx.fillStyle = "#8d6e63";
+      ctx.beginPath();
+      ctx.arc(padding + 4 * cellSize, padding + 4 * cellSize, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 돌 그리기
+      board.forEach((row, r) => row.forEach((p, c) => { if (p !== 0) drawStone(c, r, p); }));
+    }
+
+    function drawStone(x, y, type) {
+      const px = padding + x * cellSize;
+      const py = padding + y * cellSize;
+      
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.4)";
+      ctx.shadowBlur = 8;
+      ctx.shadowOffsetX = 3;
+      ctx.shadowOffsetY = 3;
+      
+      ctx.beginPath();
+      ctx.arc(px, py, stoneRadius, 0, Math.PI * 2);
+      
+      const grad = ctx.createRadialGradient(px - stoneRadius/3, py - stoneRadius/3, 2, px, py, stoneRadius);
+      if (type === 1) {
+        grad.addColorStop(0, "#555"); grad.addColorStop(1, "#000");
+      } else {
+        grad.addColorStop(0, "#fff"); grad.addColorStop(1, "#ccc");
+      }
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    canvas.addEventListener("click", (e) => {
+      if (isPaused || isAiThinking || !gameMode || (gameMode === 'ai' && currentTurn === 2)) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const col = Math.round((e.clientX - rect.left - padding) / cellSize);
+      const row = Math.round((e.clientY - rect.top - padding) / cellSize);
+
+      if (row >= 0 && row < size && col >= 0 && col < size && board[row][col] === 0) {
+        placeStone(row, col);
+        if (gameMode === 'ai' && !isPaused) {
+          isAiThinking = true;
+          updateStatusUI("ai");
+          setTimeout(aiMove, 800);
+        }
+      }
+    });
+
+    function placeStone(r, c) {
+      board[r][c] = currentTurn;
+      checkCapture(r, c);
+      currentTurn = currentTurn === 1 ? 2 : 1;
+      updateStatusUI(currentTurn);
+      drawBoard();
+    }
+
+    function updateStatusUI(turn) {
+      stoneIcon.className = "stone-icon";
+      if (turn === 1) {
+        stoneIcon.classList.add("black");
+        statusText.innerText = "흑(플레이어) 차례입니다";
+      } else if (turn === 2) {
+        stoneIcon.classList.add("white");
+        statusText.innerText = gameMode === 'ai' ? "AI가 응수하는 중..." : "백(상대방) 차례입니다";
+      } else if (turn === "ai") {
+        stoneIcon.classList.add("thinking");
+        statusText.innerText = "AI가 수 읽기 중입니다";
+      }
+    }
+
+    function aiMove() {
+      if (isPaused) return;
+      let moves = [];
+      for (let r = 0; r < size; r++) {
+        for (let c = 0; c < size; c++) {
+          if (board[r][c] === 0) {
+            let score = Math.random();
+            if (hasNeighbor(r, c, 1)) score += 2;
+            moves.push({ r, c, score });
+          }
+        }
+      }
+      if (moves.length > 0) {
+        moves.sort((a, b) => b.score - a.score);
+        const m = moves[0];
+        placeStone(m.r, m.c);
+      }
+      isAiThinking = false;
+      updateStatusUI(1);
+    }
+
+    function hasNeighbor(r, c, type) {
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+      return dirs.some(([dr, dc]) => {
+        const nr = r+dr, nc = c+dc;
+        return nr>=0 && nr<size && nc>=0 && nc<size && board[nr][nc] === type;
+      });
+    }
+
+    function checkCapture(r, c) {
+      const opp = board[r][c] === 1 ? 2 : 1;
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+      dirs.forEach(([dr, dc]) => {
+        const nr = r+dr, nc = c+dc;
+        if (nr>=0 && nr<size && nc>=0 && nc<size && board[nr][nc] === opp) {
+          const group = [];
+          if (!hasLiberty(nr, nc, opp, group)) {
+            group.forEach(([gr, gc]) => board[gr][gc] = 0);
+          }
+        }
+      });
+    }
+
+    function hasLiberty(r, c, type, group, visited = new Set()) {
+      const key = `${r},${c}`;
+      if (visited.has(key)) return false;
+      visited.add(key);
+      group.push([r, c]);
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+      for (const [dr, dc] of dirs) {
+        const nr = r+dr, nc = c+dc;
+        if (nr>=0 && nr<size && nc>=0 && nc<size) {
+          if (board[nr][nc] === 0) return true;
+          if (board[nr][nc] === type && hasLiberty(nr, nc, type, group, visited)) return true;
+        }
+      }
+      return false;
+    }
+
+    function togglePause() {
+      if (!gameMode) return;
+      isPaused = !isPaused;
+      pauseOverlay.style.display = isPaused ? "flex" : "none";
+    }
+
+    window.onkeydown = (e) => { if (e.key.toLowerCase() === 'p') togglePause(); };
+  </script>
+</body>
+</html>

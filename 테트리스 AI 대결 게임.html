@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>테트리스: 인간 vs AI (최종판)</title>
+    <style>
+        body { background: #1a1a2e; color: #fff; font-family: 'Malgun Gothic', sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+        .game-world { display: flex; gap: 20px; align-items: stretch; }
+        .board-container { display: flex; flex-direction: column; align-items: center; background: rgba(0,0,0,0.3); padding: 15px; border-radius: 15px; border: 1px solid #444; }
+        canvas { border: 2px solid #fff; background-color: #000; box-shadow: 0 0 15px rgba(0,0,0,0.5); }
+        .label { font-size: 22px; font-weight: bold; margin-bottom: 10px; text-shadow: 2px 2px 4px #000; }
+        .user-color { color: #0dc2ff; }
+        .ai-color { color: #ff0d72; }
+        
+        /* 중앙 제어 패널 */
+        .center-panel { width: 160px; display: flex; flex-direction: column; gap: 15px; align-items: center; justify-content: center; }
+        .next-box { background: #333; padding: 10px; border-radius: 8px; border: 1px solid #555; text-align: center; width: 100%; }
+        .next-box canvas { width: 80px; height: 80px; border: none; background: transparent; }
+        .score { font-size: 20px; font-weight: bold; color: #ffd700; margin: 5px 0; }
+        
+        /* 설명서 */
+        .manual { font-size: 12px; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 5px; line-height: 1.5; width: 100%; box-sizing: border-box; }
+        button { cursor: pointer; padding: 10px; width: 100%; background: #4e4e6a; color: white; border: 1px solid #fff; border-radius: 5px; transition: 0.3s; }
+        button:hover { background: #6b6b91; }
+        .hidden { visibility: hidden; opacity: 0; }
+    </style>
+</head>
+<body>
+
+    <div class="game-world">
+        <div class="board-container">
+            <div class="label user-color">USER</div>
+            <canvas id="userCanvas" width="240" height="400"></canvas>
+            <div class="score">SCORE: <span id="userScore">0</span></div>
+        </div>
+
+        <div class="center-panel">
+            <div id="nextArea" class="next-box">
+                <div style="font-size:12px; margin-bottom:5px;">USER NEXT</div>
+                <canvas id="userNextCanvas" width="80" height="80"></canvas>
+                <div style="font-size:12px; margin: 10px 0 5px 0;">AI NEXT</div>
+                <canvas id="aiNextCanvas" width="80" height="80"></canvas>
+            </div>
+            
+            <button id="pauseBtn">PAUSE (P)</button>
+            <button id="toggleNext">다음블록 숨기기</button>
+
+            <div class="manual">
+                <strong>🕹 조작키</strong><br>
+                이동: ← → / 하강: ↓<br>
+                회전: Q (좌), W (우)<br>
+                일시정지: P
+            </div>
+        </div>
+
+        <div class="board-container">
+            <div class="label ai-color">AI AGENT</div>
+            <canvas id="aiCanvas" width="240" height="400"></canvas>
+            <div class="score">SCORE: <span id="aiScore">0</span></div>
+        </div>
+    </div>
+
+    <div id="gameOverModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; flex-direction: column; align-items: center; justify-content: center;">
+        <div style="background: #2b2b45; padding: 30px; border-radius: 20px; border: 3px solid #ffd700; text-align: center; box-shadow: 0 0 30px rgba(255,215,0,0.3);">
+            <h1 id="modalTitle" style="color: #ffd700; margin-top: 0;">GAME OVER</h1>
+            <p id="modalResult" style="font-size: 20px; margin: 20px 0;"></p>
+            <button onclick="location.reload()" style="background: #ffd700; color: #000; font-weight: bold; border: none; padding: 10px 20px; font-size: 18px; border-radius: 5px;">다시 도전하기</button>
+        </div>
+    </div>
+    <script>
+        const colors = [null, '#FF0D72', '#0DC2FF', '#0DFF72', '#F538FF', '#FF8E0D', '#FFE138', '#3877FF'];
+        // 전역 변수 추가
+        let isGameOver = false;
+
+        function createMatrix(w, h) {
+            const matrix = [];
+            while (h--) matrix.push(new Array(w).fill(0));
+            return matrix;
+        }
+
+        function createPiece(type) {
+            if (type === 'T') return [[0, 1, 0], [1, 1, 1], [0, 0, 0]];
+            else if (type === 'O') return [[2, 2], [2, 2]];
+            else if (type === 'L') return [[0, 3, 0], [0, 3, 0], [0, 3, 3]];
+            else if (type === 'J') return [[0, 4, 0], [0, 4, 0], [4, 4, 0]];
+            else if (type === 'I') return [[0, 5, 0, 0], [0, 5, 0, 0], [0, 5, 0, 0], [0, 5, 0, 0]];
+            else if (type === 'S') return [[0, 6, 6], [6, 6, 0], [0, 0, 0]];
+            else if (type === 'Z') return [[7, 7, 0], [0, 7, 7], [0, 0, 0]];
+        }
+
+        class Tetris {
+          constructor(canvasId, scoreId, nextCanvasId, isAI = false) {
+            this.canvas = document.getElementById(canvasId);
+            this.context = this.canvas.getContext('2d');
+            this.context.scale(20, 20);
+        
+            this.nextCanvas = document.getElementById(nextCanvasId);
+            this.nextContext = this.nextCanvas.getContext('2d');
+            this.nextContext.scale(20, 20);
+
+            this.scoreElement = document.getElementById(scoreId);
+            this.isAI = isAI;
+
+            this.arena = createMatrix(12, 20);
+            this.player = { pos: {x: 0, y: 0}, matrix: null, score: 0 };
+            this.nextPiece = null;
+        
+            this.dropCounter = 0;
+            this.dropInterval = isAI ? 300 : 1000;
+
+            this.playerReset();
+          }
+          // --- 이 메서드들이 반드시 클래스 { } 안에 있어야 합니다 ---
+          playerMove(dir) {
+            this.player.pos.x += dir;
+            if (this.collide(this.arena, this.player)) {
+                this.player.pos.x -= dir;
+            }
+          }
+          playerRotate(dir) {
+            const pos = this.player.pos.x;
+            let offset = 1;
+            this.rotate(this.player.matrix, dir);
+            while (this.collide(this.arena, this.player)) {
+                this.player.pos.x += offset;
+                offset = -(offset + (offset > 0 ? 1 : -1));
+                if (offset > this.player.matrix[0].length) {
+                    this.rotate(this.player.matrix, -dir);
+                    this.player.pos.x = pos;
+                    return;
+                }
+            }
+          }
+          playerDrop() {
+            this.player.pos.y++;
+            if (this.collide(this.arena, this.player)) {
+                this.player.pos.y--;
+                this.merge();
+                this.playerReset();
+                this.arenaSweep();
+            }
+            this.dropCounter = 0;
+          }
+          // ---------------------------------------------------------
+          draw() {
+            this.context.fillStyle = '#000';
+            this.context.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            this.drawMatrix(this.arena, {x: 0, y: 0}, this.context);
+            this.drawMatrix(this.player.matrix, this.player.pos, this.context);
+            if (isPaused) {
+                this.context.fillStyle = 'rgba(0,0,0,0.6)';
+                this.context.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                this.context.fillStyle = '#fff';
+                this.context.font = '1.5px Arial';
+                this.context.textAlign = 'center';
+                this.context.fillText('PAUSED', 6, 10);
+            }
+          }
+          drawNext() {
+            this.nextContext.clearRect(0, 0, this.nextCanvas.width, this.nextCanvas.height);
+            this.drawMatrix(this.nextPiece, {x: 1, y: 1}, this.nextContext);
+          }
+          drawMatrix(matrix, offset, ctx) {
+            matrix.forEach((row, y) => {
+                row.forEach((value, x) => {
+                    if (value !== 0) {
+                        ctx.fillStyle = colors[value];
+                        ctx.fillRect(x + offset.x, y + offset.y, 1, 1);
+                    }
+                });
+            });
+          }
+          collide(arena, player) {
+            const [m, o] = [player.matrix, player.pos];
+            for (let y = 0; y < m.length; ++y) {
+                for (let x = 0; x < m[y].length; ++x) {
+                    if (m[y][x] !== 0 && (arena[y + o.y] && arena[y + o.y][x + o.x]) !== 0) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+          }
+          playerReset() {
+            const pieces = 'ILJOTSZ';
+            if (!this.nextPiece) {
+                this.nextPiece = createPiece(pieces[Math.random() * pieces.length | 0]);
+            }
+            this.player.matrix = this.nextPiece;
+            this.nextPiece = createPiece(pieces[Math.random() * pieces.length | 0]);
+            this.player.pos.y = 0;
+            this.player.pos.x = (this.arena[0].length / 2 | 0) - (this.player.matrix[0].length / 2 | 0);
+            // 게임 오버 체크: 이미 끝난 상태가 아닐 때만 호출
+            if (this.collide(this.arena, this.player)) {
+                if (!isGameOver) { 
+                    isGameOver = true; 
+                    showGameOver(); 
+                }
+            }
+    
+            this.drawNext();
+            if (this.isAI && !isGameOver) this.aiDecision();
+          }
+          merge() {
+            this.player.matrix.forEach((row, y) => {
+                row.forEach((value, x) => {
+                    if (value !== 0) this.arena[y + this.player.pos.y][x + this.player.pos.x] = value;
+                });
+            });
+          }
+          arenaSweep() {
+            let rowCount = 1;
+            for (let y = this.arena.length - 1; y > 0; --y) {
+                if (this.arena[y].every(v => v !== 0)) {
+                    this.arena.splice(y, 1);
+                    this.arena.unshift(new Array(12).fill(0));
+                    this.player.score += rowCount * 10;
+                    rowCount *= 2;
+                    y++;
+                }
+            }
+            this.scoreElement.innerText = this.player.score;
+          }
+          aiDecision() {
+            let bestScore = -1000000;
+            let bestX = 0;
+            let bestRot = 0;
+            const originalMatrix = this.player.matrix;
+            for (let r = 0; r < 4; r++) {
+                for (let x = -5; x < 12; x++) {
+                    let testPlayer = { pos: {x: x, y: 0}, matrix: this.player.matrix };
+                    if (this.collide(this.arena, testPlayer)) continue;
+                    while (!this.collide(this.arena, testPlayer)) testPlayer.pos.y++;
+                    testPlayer.pos.y--;
+                
+                    let score = this.evaluate(testPlayer);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestX = x;
+                        bestRot = r;
+                    }
+                }
+                this.rotate(this.player.matrix, 1);
+            }
+            this.player.matrix = originalMatrix;
+            for (let i = 0; i < bestRot; i++) this.rotate(this.player.matrix, 1);
+            this.player.pos.x = bestX;
+          }
+          evaluate(tp) {
+            let score = tp.pos.y * 5; 
+            const tempArena = this.arena.map(r => [...r]);
+            tp.matrix.forEach((row, y) => {
+                row.forEach((v, x) => {
+                    if (v !== 0 && tempArena[y+tp.pos.y]) tempArena[y+tp.pos.y][x+tp.pos.x] = v;
+                });
+            });
+            let holes = 0;
+            for (let x = 0; x < 12; x++) {
+                let fill = false;
+                for (let y = 0; y < 20; y++) {
+                    if (tempArena[y][x] !== 0) fill = true;
+                    else if (fill && tempArena[y][x] === 0) holes++;
+                }
+            }
+            return score - (holes * 20);
+          }
+          rotate(matrix, dir) {
+            for (let y = 0; y < matrix.length; ++y) {
+                for (let x = 0; x < y; ++x) [matrix[x][y], matrix[y][x]] = [matrix[y][x], matrix[x][y]];
+            }
+            if (dir > 0) matrix.forEach(row => row.reverse()); else matrix.reverse();
+          }
+          update(dt) {
+            if (isGameOver) return; // 게임 오버 시 업데이트 중단
+            this.dropCounter += dt;
+            if (this.dropCounter > this.dropInterval) this.playerDrop();
+            this.draw();
+          }
+        }
+
+        const userGame = new Tetris('userCanvas', 'userScore', 'userNextCanvas', false);
+        const aiGame = new Tetris('aiCanvas', 'aiScore', 'aiNextCanvas', true);
+
+        let lastTime = 0;
+        let isPaused = false;
+
+        // 승자 판별 및 종료 메시지 함수
+        function showGameOver() {
+            const userScore = userGame.player.score;
+            const aiScore = aiGame.player.score;
+    
+            const modal = document.getElementById('gameOverModal');
+            const modalResult = document.getElementById('modalResult');
+            const modalTitle = document.getElementById('modalTitle');
+
+            let resultMsg = "";
+            let title = "GAME OVER";
+
+            if (userScore > aiScore) {
+                title = "🎉 HUMAN WIN!";
+                resultMsg = `당신이 AI를 이겼습니다!<br><br><span style="color:#0dc2ff">USER: ${userScore}</span> VS <span style="color:#ff0d72">AI: ${aiScore}</span>`;
+            } else if (aiScore > userScore) {
+                title = "🤖 AI WIN!";
+                resultMsg = `AI가 더 똑똑했네요...<br><br><span style="color:#0dc2ff">USER: ${userScore}</span> VS <span style="color:#ff0d72">AI: ${aiScore}</span>`;
+            } else {
+                title = "🤝 DRAW!";
+                resultMsg = `막상막하의 대결이었습니다!<br><br>SCORE: ${userScore}`;
+            }
+
+            // 모달 띄우기
+            modalResult.innerHTML = resultMsg;
+            modalTitle.innerText = title;
+            modal.style.display = 'flex';
+        }
+
+        // 메인 루프 수정
+        function update(time = 0) {
+            if (isGameOver) return; // 게임이 끝나면 루프 완전 정지
+            const dt = time - lastTime;
+            lastTime = time;
+            if (!isPaused) {
+                userGame.update(dt);
+                aiGame.update(dt);
+            } else {
+                userGame.draw();
+                aiGame.draw();
+            }
+            requestAnimationFrame(update);
+        }
+
+        // 버튼 이벤트
+        document.getElementById('pauseBtn').addEventListener('click', () => {
+            isPaused = !isPaused;
+            document.getElementById('pauseBtn').innerText = isPaused ? "RESUME (P)" : "PAUSE (P)";
+        });
+
+        document.getElementById('toggleNext').addEventListener('click', (e) => {
+            const area = document.getElementById('nextArea');
+            if (area.classList.contains('hidden')) {
+                area.classList.remove('hidden');
+                e.target.innerText = "다음블록 숨기기";
+            } else {
+                area.classList.add('hidden');
+                e.target.innerText = "다음블록 보기";
+            }
+        });
+
+        document.addEventListener('keydown', event => {
+            if (event.keyCode === 80) { // P
+                isPaused = !isPaused;
+                document.getElementById('pauseBtn').innerText = isPaused ? "RESUME (P)" : "PAUSE (P)";
+            }
+            if (isPaused) return;
+            if (event.keyCode === 37) userGame.playerMove(-1);
+            else if (event.keyCode === 39) userGame.playerMove(1);
+            else if (event.keyCode === 40) userGame.playerDrop();
+            else if (event.keyCode === 81) userGame.playerRotate(-1);
+            else if (event.keyCode === 87) userGame.playerRotate(1);
+        });
+
+        update();
+    </script>
+</body>
+</html>

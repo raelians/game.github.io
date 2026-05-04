@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Gemini 버블 슈터: 익스트림</title>
+    <style>
+        :root { --accent: #ff4757; --ui-bg: #34495e; --bonus: #f1c40f; }
+        body { background-color: #2c3e50; color: white; text-align: center; font-family: 'Malgun Gothic', sans-serif; overflow: hidden; margin: 0; padding: 10px; }
+        .header { display: flex; justify-content: center; align-items: center; gap: 15px; margin-bottom: 10px; }
+        .info-box { font-size: 1.1rem; font-weight: bold; background: rgba(0,0,0,0.3); padding: 5px 12px; border-radius: 10px; min-width: 70px; }
+        #game-outer-container { position: relative; display: inline-block; }
+        canvas { background: #1a1a1a; border: 5px solid #bdc3c7; border-radius: 15px; box-shadow: 0 0 40px rgba(0,0,0,0.6); display: block; transition: filter 0.3s; }
+        #next-lvl-bar { width: 500px; height: 10px; background: #333; margin: 5px auto; border-radius: 5px; overflow: hidden; position: relative; }
+        #progress { width: 0%; height: 100%; background: var(--accent); transition: width 0.1s linear; }
+        .overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 1000; border-radius: 15px; }
+        .controls { margin-top: 15px; display: flex; justify-content: center; gap: 15px; }
+        .btn { padding: 12px 25px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; background: var(--ui-bg); color: white; font-size: 1rem; transition: 0.2s; box-shadow: 0 4px #222; }
+        .btn:hover { background: #576571; }
+        .btn-restart { background: #e67e22; }
+        #combo-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 5rem; font-weight: 900; color: #fff; pointer-events: none; opacity: 0; transition: 0.3s; text-shadow: 0 0 20px rgba(255,255,255,0.8); z-index: 500; }
+        .bonus-mode canvas { border-color: var(--bonus); box-shadow: 0 0 50px var(--bonus); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="info-box">LV. <span id="level">1</span></div>
+        <div class="info-box">SCORE: <span id="score">0</span></div>
+        <div class="info-box" style="color:var(--bonus)">COMBO: <span id="combo-val">0</span></div>
+        <div id="next-lvl-bar"><div id="progress"></div></div>
+    </div>
+
+    <div id="game-outer-container">
+        <canvas id="gameCanvas" width="500" height="600"></canvas>
+        <div id="combo-text">COMBO!</div>
+        <div id="pause-overlay" class="overlay"><h1 style="color: var(--bonus);">PAUSED</h1><button class="btn" onclick="togglePause()">계속하기</button></div>
+        <div id="gameover-overlay" class="overlay"><h1 style="color: var(--accent);">GAME OVER</h1><p id="final-score-text">최종 점수: 0</p><button class="btn btn-restart" onclick="resetGame()">다시 시작</button></div>
+        <div id="bonus-overlay" class="overlay"><h1 style="color: var(--bonus); font-size: 4rem;">BONUS TIME!</h1><p>15초간 무한 폭탄 발사!</p></div>
+    </div>
+
+    <div class="controls">
+        <button id="pause-btn" class="btn" onclick="togglePause()">일시정지 (P)</button>
+        <button class="btn btn-restart" onclick="resetGame()">새로 시작</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score'), levelEl = document.getElementById('level'), comboEl = document.getElementById('combo-val'), progressEl = document.getElementById('progress');
+        const goOverlay = document.getElementById('gameover-overlay'), pauseOverlay = document.getElementById('pause-overlay'), bonusOverlay = document.getElementById('bonus-overlay'), comboText = document.getElementById('combo-text');
+
+        const COLS = 10, ROWS = 22, RADIUS = 25, DEADLINE_Y = 520;
+        const ALL_COLORS = ['#FF4757', '#2ED573', '#1E90FF', '#FFA502', '#A29BFE', '#FF6B6B'];
+
+        let grid, fallingBubbles, projectile, nextColor, mousePos, dropTimer, isGameOver, isPaused, score, level, totalRowsAdded, lastTime, currentInterval;
+        let eyeOffsets = [], comboCount = 0, isBonusMode = false, bonusTimer = 0, lastBonusScore = 0;
+
+        function resetGame() {
+            grid = []; fallingBubbles = []; projectile = null; eyeOffsets = [];
+            score = 0; level = 1; totalRowsAdded = 0; currentInterval = 15000; comboCount = 0;
+            isBonusMode = false; lastBonusScore = 0;
+            nextColor = getRandomBubble(); mousePos = { x: 250, y: 0 }; dropTimer = 0; isGameOver = false; isPaused = false; lastTime = Date.now();
+            scoreEl.innerText = "0"; levelEl.innerText = "1"; comboEl.innerText = "0";
+            document.body.classList.remove('bonus-mode');
+            goOverlay.style.display = 'none'; pauseOverlay.style.display = 'none'; bonusOverlay.style.display = 'none';
+            for (let r = 0; r < ROWS; r++) {
+                grid[r] = new Array(COLS).fill(null);
+                eyeOffsets[r] = new Array(COLS).fill(null).map(() => getRandomEyeOffset());
+                if (r < 5) for (let c = 0; c < COLS; c++) grid[r][c] = getRandomBubble();
+            }
+        }
+
+        function togglePause() { if (!isGameOver && !isBonusMode) { isPaused = !isPaused; pauseOverlay.style.display = isPaused ? 'flex' : 'none'; if (!isPaused) lastTime = Date.now(); } }
+        window.addEventListener('keydown', (e) => { if (e.code === 'KeyP') togglePause(); });
+
+        function getRandomEyeOffset() { const range = RADIUS / 3.5; return { x: (Math.random()-0.5)*range, y: (Math.random()-0.5)*range }; }
+
+        function getRandomBubble() {
+            if (isBonusMode) return 'BOMB';
+            const rand = Math.random();
+            if (rand < 0.05) return 'BOMB';
+            if (rand < 0.08) return 'RAINBOW';
+            const availableCount = Math.min(4 + Math.floor(level / 2), ALL_COLORS.length);
+            return ALL_COLORS.slice(0, availableCount)[Math.floor(Math.random() * availableCount)];
+        }
+
+        function getPos(r, c) { return { x: c * RADIUS * 2 + RADIUS + ((r + totalRowsAdded) % 2 === 1 ? RADIUS : 0), y: r * RADIUS * 1.8 + RADIUS }; }
+        function getNeighbors(r, c) {
+            const isOdd = (r + totalRowsAdded) % 2 !== 0;
+            const adj = isOdd ? [[0,-1],[0,1],[-1,0],[-1,1],[1,0],[1,1]] : [[0,-1],[0,1],[-1,0],[-1,-1],[1,0],[1,-1]];
+            return adj.map(([dr, dc]) => [r + dr, c + dc]).filter(([nr, nc]) => nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS);
+        }
+
+        canvas.addEventListener('mousemove', (e) => { const rect = canvas.getBoundingClientRect(); mousePos.x = e.clientX - rect.left; mousePos.y = e.clientY - rect.top; });
+        canvas.addEventListener('mousedown', () => {
+            if (projectile || isGameOver || isPaused || mousePos.y >= DEADLINE_Y) return;
+            const startX = canvas.width / 2, startY = canvas.height - 40;
+            const angle = Math.atan2(mousePos.y - startY, mousePos.x - startX);
+            projectile = { x: startX, y: startY, vx: Math.cos(angle)*18, vy: Math.sin(angle)*18, color: nextColor, eyeOffset: getRandomEyeOffset() };
+            nextColor = getRandomBubble();
+        });
+
+        function showCombo() {
+            if (comboCount < 2) return;
+            comboText.innerText = `${comboCount} COMBO!`;
+            comboText.style.opacity = '1';
+            setTimeout(() => comboText.style.opacity = '0', 500);
+        }
+
+        function startBonusStage() {
+            isBonusMode = true;
+            bonusTimer = 15000;
+            document.body.classList.add('bonus-mode');
+            bonusOverlay.style.display = 'flex';
+            nextColor = 'BOMB';
+            setTimeout(() => bonusOverlay.style.display = 'none', 2000);
+        }
+
+        function updateScore(pts) {
+            const comboMultiplier = 1 + (comboCount * 0.2);
+            score += Math.floor(pts * comboMultiplier);
+            scoreEl.innerText = score;
+            level = Math.floor(score / 2000) + 1; levelEl.innerText = level;
+            currentInterval = Math.max(4000, 15000 * Math.pow(0.9, level - 1));
+            
+            if (score - lastBonusScore >= 5000 && !isBonusMode) {
+                lastBonusScore = score;
+                startBonusStage();
+            }
+        }
+
+        function removeBubbles(list) {
+            let count = 0;
+            list.forEach(key => {
+                const [r, c] = key.split(',').map(Number);
+                if (grid[r][c]) {
+                    const pos = getPos(r, c);
+                    fallingBubbles.push({ x: pos.x, y: pos.y, color: grid[r][c], vx: (Math.random()-0.5)*10, vy: -7, gravity: 0.7, eyeOffset: eyeOffsets[r][c] });
+                    grid[r][c] = null;
+                    count++;
+                }
+            });
+            if (count > 0) {
+                comboCount++;
+                comboEl.innerText = comboCount;
+                showCombo();
+                updateScore(count * 100);
+            }
+            dropFloatingBubbles();
+        }
+
+        function dropFloatingBubbles() {
+            const connected = new Set();
+            const queue = [];
+            for (let c = 0; c < COLS; c++) if (grid[0][c]) { connected.add(`0,${c}`); queue.push([0, c]); }
+            while (queue.length > 0) {
+                const [r, c] = queue.shift();
+                getNeighbors(r, c).forEach(([nr, nc]) => { if (grid[nr][nc] && !connected.has(`${nr},${nc}`)) { connected.add(`${nr},${nc}`); queue.push([nr, nc]); } });
+            }
+            for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (grid[r][c] && !connected.has(`${r},${c}`)) {
+                const pos = getPos(r, c);
+                fallingBubbles.push({ x: pos.x, y: pos.y, color: grid[r][c], vx: (Math.random()-0.5)*10, vy: -5, gravity: 0.7, eyeOffset: eyeOffsets[r][c] });
+                grid[r][c] = null;
+                updateScore(200);
+            }
+        }
+
+        function handleCollision(r, c, color, eyeOffset) {
+            if (color === 'BOMB') {
+                const targets = [`${r},${c}`];
+                getNeighbors(r, c).forEach(([nr, nc]) => { if(grid[nr][nc]) targets.push(`${nr},${nc}`); });
+                removeBubbles(targets);
+                return;
+            }
+            let finalColor = color;
+            if (color === 'RAINBOW') {
+                const neighbors = getNeighbors(r, c);
+                for (let [nr, nc] of neighbors) if (grid[nr][nc] && !['BOMB', 'RAINBOW'].includes(grid[nr][nc])) { finalColor = grid[nr][nc]; break; }
+            }
+            grid[r][c] = finalColor; eyeOffsets[r][c] = eyeOffset;
+            const matches = new Set([`${r},${c}`]), queue = [[r, c]];
+            while(queue.length > 0) {
+                const [currR, currC] = queue.shift();
+                getNeighbors(currR, currC).forEach(([nr, nc]) => { if(grid[nr][nc] === finalColor && !matches.has(`${nr},${nc}`)) { matches.add(`${nr},${nc}`); queue.push([nr, nc]); } });
+            }
+            if(matches.size >= 3) removeBubbles(matches);
+            else { comboCount = 0; comboEl.innerText = "0"; dropFloatingBubbles(); }
+        }
+
+        function update() {
+            if (isGameOver || isPaused) { lastTime = Date.now(); return; }
+            const now = Date.now(), dt = now - lastTime; lastTime = now;
+
+            if (isBonusMode) {
+                bonusTimer -= dt;
+                progressEl.style.width = (bonusTimer / 15000) * 100 + "%";
+                progressEl.style.backgroundColor = "var(--bonus)";
+                if (bonusTimer <= 0) {
+                    isBonusMode = false;
+                    document.body.classList.remove('bonus-mode');
+                    progressEl.style.backgroundColor = "var(--accent)";
+                    nextColor = getRandomBubble();
+                }
+            } else {
+                dropTimer += dt;
+                progressEl.style.width = Math.min((dropTimer / currentInterval) * 100, 100) + "%";
+                if (dropTimer >= currentInterval) {
+                    for (let r = ROWS - 1; r > 0; r--) { grid[r] = [...grid[r - 1]]; eyeOffsets[r] = [...eyeOffsets[r - 1]]; }
+                    grid[0] = new Array(COLS).fill(null).map(() => getRandomBubble());
+                    eyeOffsets[0] = new Array(COLS).fill(null).map(() => getRandomEyeOffset());
+                    totalRowsAdded++; dropTimer = 0; dropFloatingBubbles(); checkGameOver();
+                }
+            }
+
+            if (projectile) {
+                projectile.x += projectile.vx; projectile.y += projectile.vy;
+                if (projectile.x < RADIUS || projectile.x > canvas.width - RADIUS) projectile.vx *= -1;
+                let hit = false;
+                for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (grid[r][c] && Math.hypot(projectile.x - getPos(r, c).x, projectile.y - getPos(r, c).y) < RADIUS * 1.6) hit = true;
+                if (projectile.y < RADIUS) hit = true;
+                if (hit) {
+                    let bestDist = Infinity, bestR = 0, bestC = 0;
+                    for(let r=0; r<ROWS; r++) for(let c=0; c<COLS; c++) if(!grid[r][c]) {
+                        const d = Math.hypot(projectile.x - getPos(r,c).x, projectile.y - getPos(r,c).y);
+                        if(d < bestDist) { bestDist = d; bestR = r; bestC = c; }
+                    }
+                    handleCollision(bestR, bestC, projectile.color, projectile.eyeOffset);
+                    projectile = null;
+                }
+            }
+            fallingBubbles.forEach(b => { b.x += b.vx; b.y += b.vy; b.vy += b.gravity; });
+            fallingBubbles = fallingBubbles.filter(b => b.y < canvas.height + 50);
+            checkGameOver();
+        }
+
+        function checkGameOver() {
+            if (isGameOver || isBonusMode) return;
+            for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (grid[r][c] && getPos(r, c).y > DEADLINE_Y) { isGameOver = true; goOverlay.style.display = 'flex'; document.getElementById('final-score-text').innerText = `최종 점수: ${score}`; }
+        }
+
+        function drawBubble(x, y, color, eyeOffset) {
+            ctx.save(); ctx.translate(x, y);
+            ctx.beginPath(); ctx.arc(0, 0, RADIUS - 1, 0, Math.PI * 2);
+            let grad = ctx.createRadialGradient(-RADIUS/3, -RADIUS/3, 1, 0, 0, RADIUS);
+            if (color === 'BOMB') { grad.addColorStop(0, '#555'); grad.addColorStop(1, '#000'); } 
+            else if (color === 'RAINBOW') { grad.addColorStop(0, '#fff'); grad.addColorStop(0.5, '#f9f'); grad.addColorStop(1, '#9ff'); } 
+            else { grad.addColorStop(0, '#fff'); grad.addColorStop(1, color); }
+            ctx.fillStyle = grad; ctx.fill();
+            if (color === 'BOMB') { ctx.font='16px serif'; ctx.textAlign='center'; ctx.fillText('💣', 0, 5); } 
+            else if (color === 'RAINBOW') { ctx.font='16px serif'; ctx.textAlign='center'; ctx.fillText('🌈', 0, 5); } 
+            else {
+                const eyeR = RADIUS / 4, pupR = eyeR / 2, eyeSpacing = RADIUS / 2.2;
+                [[ -eyeSpacing, 0 ], [ eyeSpacing, 0 ]].forEach(([ex, ey]) => {
+                    ctx.beginPath(); ctx.arc(ex + eyeOffset.x, ey + eyeOffset.y, eyeR, 0, Math.PI*2); ctx.fillStyle = 'white'; ctx.fill();
+                    ctx.beginPath(); ctx.arc(ex + eyeOffset.x*1.4, ey + eyeOffset.y*1.4, pupR, 0, Math.PI*2); ctx.fillStyle = '#111'; ctx.fill();
+                });
+            }
+            ctx.restore();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.beginPath(); ctx.moveTo(0, DEADLINE_Y); ctx.lineTo(canvas.width, DEADLINE_Y);
+            ctx.strokeStyle = isBonusMode ? "rgba(241, 196, 15, 0.8)" : "rgba(255, 71, 87, 0.8)";
+            ctx.setLineDash([10, 10]); ctx.lineWidth = 3; ctx.stroke(); ctx.setLineDash([]);
+            for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (grid[r][c]) drawBubble(getPos(r, c).x, getPos(r, c).y, grid[r][c], eyeOffsets[r][c]);
+            fallingBubbles.forEach(b => drawBubble(b.x, b.y, b.color, b.eyeOffset));
+            const startX = canvas.width / 2, startY = canvas.height - 40;
+            if (!isGameOver && !isPaused && mousePos.y < DEADLINE_Y) {
+                const angle = Math.atan2(mousePos.y - startY, mousePos.x - startX);
+                ctx.save(); ctx.translate(startX, startY); ctx.rotate(angle);
+                ctx.beginPath(); ctx.moveTo(40,0); ctx.lineTo(100,0); ctx.strokeStyle="white"; ctx.lineWidth=3; ctx.setLineDash([8,6]); ctx.stroke();
+                ctx.restore();
+            }
+            drawBubble(startX, startY, nextColor, {x:0, y:0});
+            if (projectile) drawBubble(projectile.x, projectile.y, projectile.color, projectile.eyeOffset);
+            update(); requestAnimationFrame(draw);
+        }
+        resetGame(); draw();
+    </script>
+</body>
+</html>

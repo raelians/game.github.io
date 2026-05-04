@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>AI 빙고 대결</title>
+    <style>
+        :root { --bg: #1a1a2e; --cell-bg: #16213e; --player: #4ecca3; --ai: #e94560; --match: #f9ed69; }
+        body { background: var(--bg); color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; font-family: 'Segoe UI', sans-serif; }
+        
+        .header { width: 600px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .game-container { display: flex; gap: 40px; }
+        
+        .board-wrapper { text-align: center; }
+        .board { 
+            display: grid; grid-template-columns: repeat(5, 50px); grid-template-rows: repeat(5, 50px); 
+            gap: 5px; background: #0f3460; padding: 10px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        
+        .cell { 
+            width: 50px; height: 50px; background: var(--cell-bg); display: flex; justify-content: center; 
+            align-items: center; font-weight: bold; border-radius: 5px; cursor: pointer; transition: 0.2s; font-size: 18px;
+        }
+        .cell:hover { transform: scale(1.05); background: #1f3a5f; }
+        .cell.marked { background: var(--match); color: #1a1a2e; cursor: default; transform: rotateY(180deg); }
+        .ai-board .cell { cursor: default; } /* AI 판은 클릭 불가 */
+
+        .status { margin-top: 20px; font-size: 22px; font-weight: bold; color: var(--player); height: 30px; }
+        .bingo-count { margin-top: 10px; font-size: 16px; color: #95a5a6; }
+        button { background: #e94560; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div style="font-size: 24px; font-weight: bold;">🎰 BINGO BATTLE</div>
+    <button onclick="initGame()">새 게임 시작</button>
+</div>
+
+<div class="game-container">
+    <div class="board-wrapper">
+        <h3>PLAYER</h3>
+        <div id="player-board" class="board"></div>
+        <div id="player-bingo" class="bingo-count">BINGO: 0 / 5</div>
+    </div>
+    
+    <div class="board-wrapper">
+        <h3>AI (CPU)</h3>
+        <div id="ai-board" class="board ai-board"></div>
+        <div id="ai-bingo" class="bingo-count">BINGO: 0 / 5</div>
+    </div>
+</div>
+
+<div class="status" id="status">숫자를 선택하세요!</div>
+
+<script>
+let playerNums = [], aiNums = [];
+let playerMarked = [], aiMarked = [];
+let gameOver = false;
+let turn = 'player';
+
+function initGame() {
+    gameOver = false;
+    turn = 'player';
+    playerMarked = Array(25).fill(false);
+    aiMarked = Array(25).fill(false);
+    document.getElementById('status').innerText = "숫자를 선택하세요!";
+    document.getElementById('status').style.color = "#4ecca3";
+    
+    playerNums = shuffle([...Array(25).keys()].map(i => i + 1));
+    aiNums = shuffle([...Array(25).keys()].map(i => i + 1));
+    
+    renderBoards();
+    updateBingoCount();
+}
+
+function shuffle(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+}
+
+function renderBoards() {
+    const pBoard = document.getElementById('player-board');
+    const aBoard = document.getElementById('ai-board');
+    pBoard.innerHTML = ''; aBoard.innerHTML = '';
+
+    for (let i = 0; i < 25; i++) {
+        // Player Cell
+        const pCell = document.createElement('div');
+        pCell.className = `cell ${playerMarked[i] ? 'marked' : ''}`;
+        pCell.innerText = playerNums[i];
+        pCell.onclick = () => handlePlayerClick(playerNums[i]);
+        pBoard.appendChild(pCell);
+
+        // AI Cell (숫자는 보이지만 클릭은 안됨)
+        const aCell = document.createElement('div');
+        aCell.className = `cell ${aiMarked[i] ? 'marked' : ''}`;
+        aCell.innerText = aiNums[i];
+        aBoard.appendChild(aCell);
+    }
+}
+
+function handlePlayerClick(num) {
+    if (gameOver || turn !== 'player') return;
+    const idx = playerNums.indexOf(num);
+    if (playerMarked[idx]) return;
+
+    markNumber(num);
+    turn = 'ai';
+    checkWinner();
+    
+    if (!gameOver) {
+        document.getElementById('status').innerText = "AI가 고민 중...";
+        document.getElementById('status').style.color = "#e94560";
+        setTimeout(aiTurn, 800);
+    }
+}
+
+function markNumber(num) {
+    const pIdx = playerNums.indexOf(num);
+    const aIdx = aiNums.indexOf(num);
+    if (pIdx !== -1) playerMarked[pIdx] = true;
+    if (aIdx !== -1) aiMarked[aIdx] = true;
+    renderBoards();
+    updateBingoCount();
+}
+
+function aiTurn() {
+    if (gameOver) return;
+    
+    // 아직 안 불린 숫자들 중 랜덤 선택
+    const available = aiNums.filter((_, i) => !aiMarked[i]);
+    if (available.length > 0) {
+        const chosen = available[Math.floor(Math.random() * available.length)];
+        markNumber(chosen);
+        document.getElementById('status').innerText = `AI가 ${chosen}을(를) 불렀습니다!`;
+        document.getElementById('status').style.color = "#4ecca3";
+        turn = 'player';
+        checkWinner();
+    }
+}
+
+function countBingo(marked) {
+    let count = 0;
+    // 가로
+    for (let i = 0; i < 5; i++) {
+        if (marked.slice(i*5, i*5+5).every(v => v)) count++;
+    }
+    // 세로
+    for (let i = 0; i < 5; i++) {
+        let col = true;
+        for (let j = 0; j < 5; j++) if (!marked[i + j*5]) col = false;
+        if (col) count++;
+    }
+    // 대각선
+    if ([0, 6, 12, 18, 24].every(i => marked[i])) count++;
+    if ([4, 8, 12, 16, 20].every(i => marked[i])) count++;
+    
+    return count;
+}
+
+function updateBingoCount() {
+    const pCount = countBingo(playerMarked);
+    const aCount = countBingo(aiMarked);
+    document.getElementById('player-bingo').innerText = `BINGO: ${pCount} / 5`;
+    document.getElementById('ai-bingo').innerText = `BINGO: ${aCount} / 5`;
+}
+
+function checkWinner() {
+    const pCount = countBingo(playerMarked);
+    const aCount = countBingo(aiMarked);
+    
+    if (pCount >= 5 && aCount >= 5) {
+        document.getElementById('status').innerText = "🤝 무승부입니다!";
+        gameOver = true;
+    } else if (pCount >= 5) {
+        document.getElementById('status').innerText = "🎉 축하합니다! 당신의 승리!";
+        gameOver = true;
+    } else if (aCount >= 5) {
+        document.getElementById('status').innerText = "💀 AI가 먼저 5줄을 채웠습니다.";
+        gameOver = true;
+    }
+}
+
+initGame();
+</script>
+</body>
+</html>

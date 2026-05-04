@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>JS Typing Master</title>
+    <style>
+        body { background: #0f172a; color: #fff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; overflow: hidden; }
+        canvas { border: 3px solid #38bdf8; background: #020617; border-radius: 10px; box-shadow: 0 0 30px rgba(56, 189, 248, 0.2); }
+        .ui { margin-bottom: 15px; text-align: center; width: 800px; display: flex; justify-content: space-between; align-items: center; }
+        #inputBox { position: absolute; bottom: 50px; padding: 12px 20px; font-size: 1.5rem; border: 2px solid #38bdf8; background: #1e293b; color: #fff; border-radius: 30px; outline: none; width: 300px; text-align: center; box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); }
+        .score-info { font-size: 1.4rem; color: #38bdf8; font-weight: bold; }
+        .life-info { font-size: 1.4rem; color: #ef4444; font-weight: bold; }
+        #msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 4rem; font-weight: bold; color: #38bdf8; text-shadow: 0 0 20px #38bdf8; pointer-events: none; display: none; }
+    </style>
+</head>
+<body>
+    <div id="msg">STAGE UP!</div>
+    <div class="ui">
+        <div class="score-info">SCORE: <span id="score">0</span></div>
+        <div id="stageInfo" style="font-size: 1.2rem; color: #fbbf24;">STAGE: <span id="stageNum">1</span></div>
+        <div class="life-info">LIVES: <span id="lives">5</span></div>
+    </div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <input type="text" id="inputBox" placeholder="Type here!" autocomplete="off">
+    <div style="margin-top: 60px; color: #64748b;">Press [Enter] to start/restart after Game Over</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const inputBox = document.getElementById('inputBox');
+const scoreEl = document.getElementById('score'), livesEl = document.getElementById('lives'), stageEl = document.getElementById('stageNum');
+const msg = document.getElementById('msg');
+
+// 단어 DB (원하는 단어를 추가하세요)
+const wordList = ["apple", "banana", "coding", "javascript", "galaxy", "window", "monitor", "keyboard", "coffee", "science", "future", "player", "system", "engine", "rocket", "nebula", "binary", "digital", "network", "server"];
+
+let words = [];
+let score = 0, lives = 5, stage = 1;
+let isGameOver = false, gameStarted = false;
+let spawnInterval = 2000; // 단어 생성 주기 (ms)
+let lastSpawnTime = 0;
+
+function spawnWord() {
+    const text = wordList[Math.floor(Math.random() * wordList.length)];
+    words.push({
+        text: text,
+        x: Math.random() * (canvas.width - 150) + 50,
+        y: -30,
+        speed: (Math.random() * 0.5 + 0.5) * (1 + stage * 0.2),
+        color: `hsl(${Math.random() * 360}, 70%, 70%)`
+    });
+}
+
+function update(time) {
+    if (isGameOver || !gameStarted) return;
+
+    // 단어 생성
+    if (time - lastSpawnTime > spawnInterval) {
+        spawnWord();
+        lastSpawnTime = time;
+    }
+
+    words.forEach((w, i) => {
+        w.y += w.speed;
+        
+        // 바닥에 닿았을 때
+        if (w.y > canvas.height) {
+            words.splice(i, 1);
+            lives--;
+            livesEl.innerText = lives;
+            canvas.style.borderColor = "#ef4444";
+            setTimeout(() => canvas.style.borderColor = "#38bdf8", 200);
+            if (lives <= 0) isGameOver = true;
+        }
+    });
+
+    // 스테이지 업 (500점마다)
+    if (score >= stage * 500) {
+        stage++;
+        stageEl.innerText = stage;
+        spawnInterval = Math.max(800, spawnInterval - 200);
+        msg.style.display = 'block';
+        setTimeout(() => msg.style.display = 'none', 1500);
+    }
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 배경 별 (간단하게)
+    ctx.fillStyle = "#1e293b";
+    for(let i=0; i<20; i++) ctx.fillRect((i*137)%canvas.width, (i*243)%canvas.height, 2, 2);
+
+    if (!gameStarted) {
+        ctx.fillStyle = "#38bdf8";
+        ctx.font = "bold 40px Segoe UI";
+        ctx.textAlign = "center";
+        ctx.fillText("WORD SHOOTER", canvas.width/2, canvas.height/2);
+        ctx.font = "20px Segoe UI";
+        ctx.fillText("Type words and press Enter", canvas.width/2, canvas.height/2 + 50);
+        return;
+    }
+
+    // 단어 그리기
+    words.forEach(w => {
+        ctx.fillStyle = w.color;
+        ctx.font = "bold 24px 'Courier New'";
+        ctx.textAlign = "center";
+        // 그림자 효과
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = w.color;
+        ctx.fillText(w.text, w.x, w.y);
+        ctx.shadowBlur = 0;
+    });
+
+    if (isGameOver) {
+        ctx.fillStyle = "rgba(2, 6, 23, 0.85)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#ef4444";
+        ctx.font = "bold 50px Segoe UI";
+        ctx.textAlign = "center";
+        ctx.fillText("GAME OVER", canvas.width/2, canvas.height/2 - 20);
+        ctx.fillStyle = "#fff";
+        ctx.font = "20px Segoe UI";
+        ctx.fillText(`Final Score: ${score}`, canvas.width/2, canvas.height/2 + 30);
+        ctx.fillText("Press [Enter] to restart", canvas.width/2, canvas.height/2 + 70);
+    }
+}
+
+// 입력 확인
+inputBox.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        if (!gameStarted || isGameOver) {
+            resetGame();
+            return;
+        }
+
+        const typed = inputBox.value.trim().toLowerCase();
+        const index = words.findIndex(w => w.text === typed);
+
+        if (index !== -1) {
+            // 맞혔을 때 효과음 대신 시각 효과
+            score += 100;
+            scoreEl.innerText = score;
+            words.splice(index, 1);
+        }
+        inputBox.value = "";
+    }
+});
+
+function resetGame() {
+    words = [];
+    score = 0; lives = 5; stage = 1;
+    isGameOver = false; gameStarted = true;
+    spawnInterval = 2000;
+    scoreEl.innerText = score; livesEl.innerText = lives; stageEl.innerText = stage;
+    inputBox.value = "";
+    inputBox.focus();
+}
+
+function loop(time) {
+    update(time);
+    draw();
+    requestAnimationFrame(loop);
+}
+
+inputBox.focus();
+loop(0);
+</script>
+</body>
+</html>

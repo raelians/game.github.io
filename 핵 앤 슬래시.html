@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>네온 핵 앤 슬래시 - 프로 에디션</title>
+    <style>
+        body { margin: 0; background: #050505; color: white; font-family: 'Pretendard', sans-serif; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+        
+        /* 상단 UI */
+        #game-ui { position: absolute; top: 20px; left: 20px; z-index: 5; pointer-events: none; }
+        .stat { font-size: 24px; font-weight: 900; margin-bottom: 5px; text-shadow: 0 0 10px rgba(0,255,200,0.5); }
+        #hp-bar-container { width: 250px; height: 12px; background: rgba(255,255,255,0.1); border-radius: 6px; overflow: hidden; }
+        #hp-bar { width: 100%; height: 100%; background: linear-gradient(90deg, #ff4757, #ff6b81); transition: 0.1s; }
+
+        /* 중앙 오버레이 (일시정지/게임오버 공용) */
+        .overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: none; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 20; backdrop-filter: blur(8px);
+        }
+        .overlay h1 { font-size: 70px; margin-bottom: 10px; font-weight: 900; letter-spacing: -2px; }
+        .overlay p { font-size: 20px; color: #aaa; margin-bottom: 30px; }
+        
+        /* 버튼 스타일 */
+        .btn-group { display: flex; gap: 15px; }
+        button {
+            padding: 15px 35px; font-size: 18px; font-weight: bold; border: none;
+            border-radius: 50px; cursor: pointer; transition: 0.3s; color: white;
+        }
+        .btn-resume { background: #00ffcc; color: #000; }
+        .btn-restart { background: #ff4757; }
+        button:hover { transform: scale(1.1); box-shadow: 0 0 20px rgba(255,255,255,0.2); }
+
+        canvas { display: block; background: #000; cursor: crosshair; }
+    </style>
+</head>
+<body>
+
+    <div id="game-ui">
+        <div class="stat" id="score-text">KILLS: 0</div>
+        <div id="hp-bar-container"><div id="hp-bar"></div></div>
+        <div style="margin-top:10px; color:#666; font-size:12px;">P: 일시정지 | WASD: 이동 | CLICK: 공격</div>
+    </div>
+
+    <div id="overlay" class="overlay">
+        <h1 id="status-title">PAUSED</h1>
+        <p id="status-desc">전열을 가다듬고 다시 시작하세요.</p>
+        <div class="btn-group">
+            <button id="btn-resume" class="btn-resume" onclick="togglePause()">계속하기</button>
+            <button class="btn-restart" onclick="resetGame()">새 게임</button>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const hpBar = document.getElementById("hp-bar");
+        const scoreText = document.getElementById("score-text");
+        const overlay = document.getElementById("overlay");
+        const statusTitle = document.getElementById("status-title");
+        const statusDesc = document.getElementById("status-desc");
+        const btnResume = document.getElementById("btn-resume");
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // 게임 변수
+        let score, isGameOver, isPaused, player, bullets, enemies, particles, keys;
+        let mouseX = 0, mouseY = 0;
+
+        function initData() {
+            score = 0;
+            isGameOver = false;
+            isPaused = false;
+            bullets = [];
+            enemies = [];
+            particles = [];
+            keys = {};
+            player = {
+                x: canvas.width / 2,
+                y: canvas.height / 2,
+                radius: 20,
+                hp: 100,
+                maxHp: 100,
+                speed: 5,
+                angle: 0
+            };
+            scoreText.innerText = `KILLS: 0`;
+            hpBar.style.width = "100%";
+            overlay.style.display = "none";
+        }
+
+        // 입력 처리
+        window.addEventListener("keydown", e => {
+            keys[e.code] = true;
+            if (e.code === "KeyP") togglePause();
+        });
+        window.addEventListener("keyup", e => keys[e.code] = false);
+        window.addEventListener("mousemove", e => { mouseX = e.clientX; mouseY = e.clientY; });
+        window.addEventListener("mousedown", () => { if(!isPaused && !isGameOver) fireBullet(); });
+
+        function togglePause() {
+            if (isGameOver) return;
+            isPaused = !isPaused;
+            if (isPaused) {
+                statusTitle.innerText = "PAUSED";
+                statusTitle.style.color = "#00ffcc";
+                statusDesc.innerText = "잠시 휴식 중...";
+                btnResume.style.display = "block";
+                overlay.style.display = "flex";
+            } else {
+                overlay.style.display = "none";
+                animate();
+            }
+        }
+
+        function resetGame() {
+            initData();
+            animate();
+        }
+
+        function fireBullet() {
+            const speed = 15;
+            const vx = Math.cos(player.angle) * speed;
+            const vy = Math.sin(player.angle) * speed;
+            bullets.push({ x: player.x, y: player.y, vx, vy, life: 50 });
+        }
+
+        function spawnEnemy() {
+            if (isPaused || isGameOver) return;
+            const radius = 22;
+            let x, y;
+            if (Math.random() < 0.5) {
+                x = Math.random() < 0.5 ? -radius : canvas.width + radius;
+                y = Math.random() * canvas.height;
+            } else {
+                x = Math.random() * canvas.width;
+                y = Math.random() < 0.5 ? -radius : canvas.height + radius;
+            }
+            enemies.push({ x, y, radius, speed: 1.5 + Math.random() * 2, hp: 2 });
+        }
+
+        function createParticles(x, y, color) {
+            for (let i = 0; i < 10; i++) {
+                particles.push({
+                    x, y,
+                    vx: (Math.random() - 0.5) * 12,
+                    vy: (Math.random() - 0.5) * 12,
+                    radius: Math.random() * 3.5,
+                    life: 25,
+                    color
+                });
+            }
+        }
+
+        function update() {
+            if (isPaused || isGameOver) return;
+
+            // 플레이어 이동
+            if (keys["KeyW"]) player.y -= player.speed;
+            if (keys["KeyS"]) player.y += player.speed;
+            if (keys["KeyA"]) player.x -= player.speed;
+            if (keys["KeyD"]) player.x += player.speed;
+
+            player.angle = Math.atan2(mouseY - player.y, mouseX - player.x);
+
+            // 투사체
+            bullets.forEach((b, i) => {
+                b.x += b.vx; b.y += b.vy; b.life--;
+                if (b.life <= 0) bullets.splice(i, 1);
+            });
+
+            // 적군
+            enemies.forEach((en, i) => {
+                const angle = Math.atan2(player.y - en.y, player.x - en.x);
+                en.x += Math.cos(angle) * en.speed;
+                en.y += Math.sin(angle) * en.speed;
+
+                // 플레이어 피격
+                const dist = Math.hypot(player.x - en.x, player.y - en.y);
+                if (dist < player.radius + en.radius) {
+                    player.hp -= 0.4;
+                    hpBar.style.width = (player.hp / player.maxHp * 100) + "%";
+                    if (player.hp <= 0) {
+                        isGameOver = true;
+                        statusTitle.innerText = "GAME OVER";
+                        statusTitle.style.color = "#ff4757";
+                        statusDesc.innerText = `최종 처치 수: ${score}`;
+                        btnResume.style.display = "none";
+                        overlay.style.display = "flex";
+                    }
+                }
+
+                // 적군 피격
+                bullets.forEach((b, bi) => {
+                    if (Math.hypot(b.x - en.x, b.y - en.y) < en.radius + 15) {
+                        en.hp--;
+                        createParticles(en.x, en.y, "#00ffcc");
+                        if (en.hp <= 0) {
+                            enemies.splice(i, 1);
+                            score++;
+                            scoreText.innerText = `KILLS: ${score}`;
+                        }
+                    }
+                });
+            });
+
+            particles.forEach((p, i) => {
+                p.x += p.vx; p.y += p.vy; p.life--;
+                if (p.life <= 0) particles.splice(i, 1);
+            });
+        }
+
+        function draw() {
+            ctx.fillStyle = "rgba(5, 5, 5, 0.3)"; // 잔상 효과
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 파티클
+            particles.forEach(p => {
+                ctx.globalAlpha = p.life / 25;
+                ctx.fillStyle = p.color;
+                ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2); ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+
+            // 투사체 (검기)
+            bullets.forEach(b => {
+                ctx.strokeStyle = "#00ffcc";
+                ctx.lineWidth = 4;
+                ctx.shadowBlur = 15; ctx.shadowColor = "#00ffcc";
+                ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * 1.5, b.y - b.vy * 1.5); ctx.stroke();
+                ctx.shadowBlur = 0;
+            });
+
+            // 적군
+            enemies.forEach(en => {
+                ctx.fillStyle = "#ff4757";
+                ctx.shadowBlur = 15; ctx.shadowColor = "#ff4757";
+                ctx.beginPath(); ctx.arc(en.x, en.y, en.radius, 0, Math.PI * 2); ctx.fill();
+                ctx.shadowBlur = 0;
+            });
+
+            // 플레이어
+            ctx.save();
+            ctx.translate(player.x, player.y);
+            ctx.rotate(player.angle);
+            ctx.fillStyle = "#00ffcc";
+            ctx.shadowBlur = 25; ctx.shadowColor = "#00ffcc";
+            ctx.beginPath(); ctx.moveTo(25, 0); ctx.lineTo(-15, -15); ctx.lineTo(-15, 15); ctx.fill();
+            ctx.restore();
+        }
+
+        function animate() {
+            if (isPaused || isGameOver) return;
+            update();
+            draw();
+            requestAnimationFrame(animate);
+        }
+
+        // 적 생성 타이머
+        setInterval(spawnEnemy, 600);
+
+        // 초기 실행
+        initData();
+        animate();
+
+        // 윈도우 리사이즈 대응
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+    </script>
+</body>
+</html>

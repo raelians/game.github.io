@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Othello Master</title>
+    <style>
+        :root {
+            --bg-color: #2c3e50;
+            --board-color: #27ae60;
+            --cell-border: rgba(0,0,0,0.1);
+            --black-stone: #2c3e50;
+            --white-stone: #ecf0f1;
+        }
+
+        * { box-sizing: border-box; font-family: 'Pretendard', sans-serif; }
+        body { background-color: #ecf0f1; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+
+        .game_container { display: flex; gap: 30px; background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+
+        /* 보드 레이아웃 */
+        #othello {
+            display: grid;
+            grid-template-columns: repeat(8, 70px);
+            grid-template-rows: repeat(8, 70px);
+            background-color: var(--board-color);
+            border: 5px solid #1e8449;
+            border-radius: 8px;
+            gap: 2px;
+            padding: 5px;
+        }
+
+        .cell {
+            width: 70px;
+            height: 70px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            position: relative;
+        }
+
+        /* 놓을 수 있는 자리 가이드 */
+        .cell.can-place::after {
+            content: '';
+            width: 15px;
+            height: 15px;
+            background: rgba(0,0,0,0.15);
+            border-radius: 50%;
+        }
+
+        /* 돌 디자인 */
+        .coin {
+            width: 55px;
+            height: 55px;
+            border-radius: 50%;
+            transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            transform-style: preserve-3d;
+            position: relative;
+        }
+
+        .coin.black { transform: rotateY(0deg); }
+        .coin.white { transform: rotateY(180deg); }
+
+        .coin::before, .coin::after {
+            content: '';
+            position: absolute;
+            width: 100%; height: 100%;
+            border-radius: 50%;
+            backface-visibility: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .coin::after { background: var(--black-stone); }
+        .coin::before { background: var(--white-stone); transform: rotateY(180deg); }
+
+        /* 대시보드 */
+        .dashboard { width: 300px; display: flex; flex-direction: column; gap: 15px; }
+        .status-box { padding: 15px; border-radius: 10px; background: #f8f9fa; border: 1px solid #dee2e6; }
+        .score-row { display: flex; justify-content: space-between; font-size: 1.2rem; font-weight: bold; margin: 10px 0; }
+        
+        button {
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: var(--bg-color);
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button:hover { opacity: 0.9; transform: translateY(-2px); }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .full-btn { grid-column: span 2; }
+
+        .mode-select { font-size: 0.9rem; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="game_container">
+        <div id="othello"></div>
+
+        <div class="dashboard">
+            <div class="status-box">
+                <div id="status-text" style="font-weight: bold; color: #e67e22; margin-bottom: 10px;">게임을 시작해 주세요.</div>
+                <div class="score-row">
+                    <span>흑 (Black)</span>
+                    <span id="score-black">2</span>
+                </div>
+                <div class="score-row">
+                    <span>백 (White)</span>
+                    <span id="score-white">2</span>
+                </div>
+            </div>
+
+            <div class="controls">
+                <button id="reset-btn" class="full-btn">새 게임 (Reset)</button>
+                <button id="pass-btn">기권/패스</button>
+                <button id="hint-btn">힌트 보기</button>
+            </div>
+
+            <div class="mode-select">
+                <p><b>게임 모드</b></p>
+                <label><input type="radio" name="mode" value="1P" checked> 1인용 (vs AI)</label><br>
+                <label><input type="radio" name="mode" value="2P"> 2인용 (친구와)</label>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const boardSize = 8;
+        let board = []; // 0: 빈칸, 1: 흑, -1: 백
+        let currentTurn = 1; // 1: 흑, -1: 백
+        let isGameOver = false;
+
+        const boardEl = document.getElementById('othello');
+        const statusEl = document.getElementById('status-text');
+        const scoreBlackEl = document.getElementById('score-black');
+        const scoreWhiteEl = document.getElementById('score-white');
+
+        // 초기화: 보드 생성
+        function initBoard() {
+            boardEl.innerHTML = '';
+            board = Array.from({ length: boardSize }, () => Array(boardSize).fill(0));
+            
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+                    cell.onclick = () => handleCellClick(r, c);
+                    boardEl.appendChild(cell);
+                }
+            }
+
+            // 시작 위치 설정
+            placeStone(3, 3, -1);
+            placeStone(3, 4, 1);
+            placeStone(4, 3, 1);
+            placeStone(4, 4, -1);
+            
+            updateUI();
+        }
+
+        // 특정 위치에 돌 놓기 (UI 반영)
+        function placeStone(r, c, color) {
+            board[r][c] = color;
+            const cell = boardEl.children[r * boardSize + c];
+            let coin = cell.querySelector('.coin');
+            
+            if (!coin) {
+                coin = document.createElement('div');
+                coin.className = 'coin';
+                cell.appendChild(coin);
+            }
+            
+            coin.className = `coin ${color === 1 ? 'black' : 'white'}`;
+        }
+
+        // 클릭 이벤트 핸들러
+        function handleCellClick(r, c) {
+            if (isGameOver) return;
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            
+            // AI 턴일 때 클릭 방지
+            if (mode === '1P' && currentTurn === -1) return;
+
+            if (executeMove(r, c, currentTurn)) {
+                switchTurn();
+            }
+        }
+
+        // 돌을 놓는 로직 (뒤집기 포함)
+        function executeMove(r, c, color) {
+            if (board[r][c] !== 0) return false;
+
+            const flipList = getFlipList(r, c, color);
+            if (flipList.length === 0) return false;
+
+            placeStone(r, c, color);
+            flipList.forEach(([fr, fc]) => {
+                placeStone(fr, fc, color);
+            });
+
+            return true;
+        }
+
+        // 뒤집힐 돌 목록 계산
+        function getFlipList(r, c, color) {
+            const directions = [
+                [-1,-1], [-1,0], [-1,1],
+                [0,-1],          [0,1],
+                [1,-1],  [1,0],  [1,1]
+            ];
+            let totalFlips = [];
+
+            directions.forEach(([dr, dc]) => {
+                let tempFlips = [];
+                let currR = r + dr;
+                let currC = c + dc;
+
+                while (currR >= 0 && currR < boardSize && currC >= 0 && currC < boardSize) {
+                    if (board[currR][currC] === 0) break;
+                    if (board[currR][currC] === color) {
+                        totalFlips = totalFlips.concat(tempFlips);
+                        break;
+                    }
+                    tempFlips.push([currR, currC]);
+                    currR += dr;
+                    currC += dc;
+                }
+            });
+            return totalFlips;
+        }
+
+        // 턴 교체
+        function switchTurn() {
+            currentTurn *= -1;
+            updateUI();
+
+            // 놓을 곳이 있는지 확인
+            const possibleMoves = getAllPossibleMoves(currentTurn);
+            
+            if (possibleMoves.length === 0) {
+                const opponentMoves = getAllPossibleMoves(-currentTurn);
+                if (opponentMoves.length === 0) {
+                    endGame();
+                    return;
+                }
+                statusEl.innerText = `${currentTurn === 1 ? '흑' : '백'}의 둘 곳이 없어 패스합니다.`;
+                setTimeout(switchTurn, 1000);
+                return;
+            }
+
+            // AI 모드이고 백돌 턴인 경우
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            if (mode === '1P' && currentTurn === -1) {
+                statusEl.innerText = "AI가 생각 중입니다...";
+                setTimeout(aiMove, 800);
+            }
+        }
+
+        // AI 로직 (간단한 가중치 전략)
+        function aiMove() {
+            const moves = getAllPossibleMoves(-1);
+            if (moves.length === 0) {
+                switchTurn();
+                return;
+            }
+
+            // 구석 자리를 우선시하는 가중치 전략
+            moves.sort((a, b) => {
+                const getWeight = (r, c) => {
+                    if ((r === 0 || r === 7) && (c === 0 || c === 7)) return 100;
+                    if (r === 0 || r === 7 || c === 0 || c === 7) return 10;
+                    return 1;
+                };
+                return getWeight(b.r, b.c) - getWeight(a.r, a.c);
+            });
+
+            const bestMove = moves[0];
+            executeMove(bestMove.r, bestMove.c, -1);
+            switchTurn();
+        }
+
+        function getAllPossibleMoves(color) {
+            let moves = [];
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (board[r][c] === 0 && getFlipList(r, c, color).length > 0) {
+                        moves.push({ r, c });
+                    }
+                }
+            }
+            return moves;
+        }
+
+        function updateUI() {
+            // 점수 계산
+            let black = 0, white = 0;
+            board.forEach(row => row.forEach(cell => {
+                if (cell === 1) black++;
+                if (cell === -1) white++;
+            }));
+
+            scoreBlackEl.innerText = black;
+            scoreWhiteEl.innerText = white;
+            
+            if (!isGameOver) {
+                statusEl.innerText = `${currentTurn === 1 ? '흑(Black)' : '백(White)'} 턴입니다.`;
+                statusEl.style.color = currentTurn === 1 ? '#2c3e50' : '#7f8c8d';
+            }
+
+            // 놓을 수 있는 자리 가이드 표시
+            document.querySelectorAll('.cell').forEach(cell => {
+                const r = parseInt(cell.dataset.row);
+                const c = parseInt(cell.dataset.col);
+                cell.classList.remove('can-place');
+                if (!isGameOver && board[r][c] === 0 && getFlipList(r, c, currentTurn).length > 0) {
+                    cell.classList.add('can-place');
+                }
+            });
+        }
+
+        function endGame() {
+            isGameOver = true;
+            const b = parseInt(scoreBlackEl.innerText);
+            const w = parseInt(scoreWhiteEl.innerText);
+            let msg = b > w ? "흑 승리!" : b < w ? "백 승리!" : "무승부!";
+            statusEl.innerText = `게임 종료: ${msg}`;
+            statusEl.style.color = "#e74c3c";
+            alert(`게임이 종료되었습니다!\n흑: ${b}개 / 백: ${w}개\n${msg}`);
+        }
+
+        // 이벤트 리스너
+        document.getElementById('reset-btn').onclick = () => {
+            isGameOver = false;
+            currentTurn = 1;
+            initBoard();
+        };
+
+        document.getElementById('pass-btn').onclick = () => {
+            if (confirm("정말 이번 턴을 기권/패스하시겠습니까?")) {
+                switchTurn();
+            }
+        };
+
+        // 초기 실행
+        initBoard();
+    </script>
+</body>
+</html>

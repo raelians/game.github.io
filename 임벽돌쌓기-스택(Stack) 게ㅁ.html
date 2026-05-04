@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>네온 스택 타워 - 전체 보기 모드</title>
+    <style>
+        body { margin: 0; background: #050505; color: white; font-family: 'Pretendard', sans-serif; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+        #game-container { position: relative; box-shadow: 0 0 60px rgba(0,255,200,0.2); border: 2px solid #222; border-radius: 10px; overflow: hidden; }
+        canvas { background: #0a0a0a; display: block; }
+        
+        .ui-layer { position: absolute; top: 20px; width: 100%; text-align: center; pointer-events: none; z-index: 5; }
+        #score { font-size: 50px; font-weight: 900; color: #00ffcc; text-shadow: 0 0 15px rgba(0,255,200,0.6); }
+        
+        /* 오버레이 스타일 */
+        .overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: none; flex-direction: column;
+            align-items: center; justify-content: center; backdrop-filter: blur(8px); z-index: 10;
+        }
+        .btn-group { display: flex; gap: 15px; pointer-events: auto; }
+        button { padding: 15px 35px; font-size: 18px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; transition: 0.3s; }
+        .btn-main { background: #00ffcc; color: #000; box-shadow: 0 0 15px rgba(0,255,200,0.3); }
+        .btn-sub { background: #ff4757; color: #fff; }
+        button:hover { transform: translateY(-3px); filter: brightness(1.1); }
+
+        .controls-hint { margin-top: 25px; color: #555; font-size: 14px; text-align: center; }
+        b { color: #00ffcc; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div class="ui-layer"><div id="score">0</div></div>
+        
+        <div id="overlay" class="overlay">
+            <h1 id="status-title" style="font-size: 50px; margin-bottom: 30px;">PAUSED</h1>
+            <div class="btn-group">
+                <button id="btn-resume" class="btn-main" onclick="togglePause()">계속하기</button>
+                <button class="btn-sub" onclick="resetGame()">새 게임</button>
+            </div>
+        </div>
+        
+        <canvas id="gameCanvas" width="450" height="700"></canvas>
+    </div>
+
+    <div class="controls-hint">
+        <b>클릭/스페이스:</b> 벽돌 쌓기 | <b>P:</b> 일시정지<br>
+        <b>마우스 휠:</b> 쌓아올린 1층까지 내려가보기
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreUI = document.getElementById("score");
+        const overlay = document.getElementById("overlay");
+        const statusTitle = document.getElementById("status-title");
+        const btnResume = document.getElementById("btn-resume");
+
+        const MODES = { PLAYING: 1, PAUSED: 2, GAMEOVER: 3 };
+        let mode = MODES.PLAYING;
+        let score = 0;
+        let cameraY = 0; 
+        let targetCameraY = 0;
+        const boxHeight = 45;
+        let boxes = [];
+        let activeBox = {};
+
+        function init() {
+            score = 0;
+            cameraY = 0;
+            targetCameraY = 0;
+            mode = MODES.PLAYING;
+            scoreUI.innerText = score;
+            overlay.style.display = "none";
+            
+            // 1층 바닥 상자 생성
+            boxes = [{
+                x: 125,
+                y: canvas.height - boxHeight - 20, // 바닥에서 살짝 위
+                width: 200,
+                color: 'hsl(180, 70%, 50%)'
+            }];
+            
+            createNewBox();
+            animate();
+        }
+
+        function createNewBox() {
+            const prevBox = boxes[boxes.length - 1];
+            activeBox = {
+                x: 0,
+                y: prevBox.y - boxHeight, // 이전 박스 바로 위에 생성
+                width: prevBox.width,
+                color: `hsl(${(boxes.length * 20) % 360}, 70%, 60%)`,
+                speed: 3 + (boxes.length * 0.1),
+                direction: 1
+            };
+        }
+
+        function placeBox() {
+            if (mode !== MODES.PLAYING) return;
+
+            const prevBox = boxes[boxes.length - 1];
+            const diff = activeBox.x - prevBox.x;
+            const margin = Math.abs(diff);
+
+            if (margin >= prevBox.width) {
+                gameOver();
+                return;
+            }
+
+            const newWidth = prevBox.width - margin;
+            const newX = diff > 0 ? activeBox.x : prevBox.x;
+
+            boxes.push({ x: newX, y: activeBox.y, width: newWidth, color: activeBox.color });
+            score++;
+            scoreUI.innerText = score;
+
+            // 쌓인 높이가 화면의 1/3을 넘어가면 카메라 자동 추적
+            const currentTopY = activeBox.y + cameraY;
+            if (currentTopY < 250) {
+                targetCameraY += boxHeight;
+            }
+
+            createNewBox();
+        }
+
+        // 마우스 휠 제어
+        window.addEventListener("wheel", (e) => {
+            if (mode === MODES.GAMEOVER) return;
+            
+            targetCameraY -= e.deltaY * 0.6;
+
+            // 바닥(1층) 아래로는 못 가게 제한
+            if (targetCameraY < 0) targetCameraY = 0;
+            // 타워 꼭대기보다 너무 멀리 위로는 못 가게 제한
+            const maxScroll = Math.max(0, (boxes.length - 2) * boxHeight);
+            if (targetCameraY > maxScroll) targetCameraY = maxScroll;
+        });
+
+        function gameOver() {
+            mode = MODES.GAMEOVER;
+            statusTitle.innerText = "TOWER COLLAPSED";
+            statusTitle.style.color = "#ff4757";
+            btnResume.style.display = "none";
+            overlay.style.display = "flex";
+        }
+
+        function togglePause() {
+            if (mode === MODES.GAMEOVER) return;
+            if (mode === MODES.PLAYING) {
+                mode = MODES.PAUSED;
+                statusTitle.innerText = "PAUSED";
+                statusTitle.style.color = "#00ffcc";
+                btnResume.style.display = "block";
+                overlay.style.display = "flex";
+            } else {
+                mode = MODES.PLAYING;
+                overlay.style.display = "none";
+                animate();
+            }
+        }
+
+        function resetGame() { init(); }
+
+        window.addEventListener("keydown", e => {
+            if (e.code === "Space") placeBox();
+            if (e.code === "KeyP") togglePause();
+        });
+        canvas.addEventListener("mousedown", placeBox);
+
+        function update() {
+            if (mode !== MODES.PLAYING) return;
+
+            activeBox.x += activeBox.speed * activeBox.direction;
+            if (activeBox.x + activeBox.width > canvas.width || activeBox.x < 0) {
+                activeBox.direction *= -1;
+            }
+
+            cameraY += (targetCameraY - cameraY) * 0.1;
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 배경 그리드 (원근감 효과)
+            ctx.strokeStyle = "#111";
+            for(let i=0; i<canvas.width; i+=50) {
+                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
+            }
+
+            ctx.save();
+            ctx.translate(0, cameraY); 
+
+            // 1층부터 현재 층까지 모든 상자 그리기
+            boxes.forEach((box, i) => {
+                ctx.fillStyle = box.color;
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = box.color;
+                
+                // 블록 본체
+                ctx.fillRect(box.x, box.y, box.width, box.height);
+                
+                // 광택 효과
+                ctx.fillStyle = "rgba(255,255,255,0.1)";
+                ctx.fillRect(box.x, box.y, box.width, 4);
+                
+                // 테두리
+                ctx.strokeStyle = "rgba(255,255,255,0.2)";
+                ctx.lineWidth = 1;
+                ctx.strokeRect(box.x, box.y, box.width, box.height);
+            });
+
+            // 현재 움직이는 상자
+            if (mode !== MODES.GAMEOVER) {
+                ctx.fillStyle = activeBox.color;
+                ctx.shadowBlur = 30;
+                ctx.shadowColor = activeBox.color;
+                ctx.fillRect(activeBox.x, activeBox.y, activeBox.width, boxHeight);
+                
+                ctx.strokeStyle = "#fff";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(activeBox.x, activeBox.y, activeBox.width, boxHeight);
+            }
+            
+            ctx.restore();
+        }
+
+        function animate() {
+            if (mode === MODES.PAUSED) return;
+            update();
+            draw();
+            requestAnimationFrame(animate);
+        }
+
+        init();
+    </script>
+</body>
+</html>

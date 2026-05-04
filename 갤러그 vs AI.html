@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>JS Galaga: Final Edition</title>
+    <style>
+        body { background: #050505; color: #fff; font-family: 'Courier New', Courier, monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; overflow: hidden; }
+        canvas { border: 4px solid #333; background: #000; box-shadow: 0 0 40px rgba(0, 212, 255, 0.1); }
+        .info { margin-bottom: 10px; text-align: center; width: 750px; display: flex; justify-content: space-between; align-items: center; height: 40px; }
+        #status { font-size: 1.6em; font-weight: bold; color: #00D4FF; margin: 0; }
+        .score-container { display: flex; gap: 20px; font-size: 1.2em; visibility: hidden; }
+        .p1-score { color: #00D4FF; }
+        .p2-score { color: #00FF41; }
+        .controls { margin-top: 10px; font-size: 0.85em; color: #aaa; text-align: center; }
+        .danger { color: #FF3E3E !important; animation: blink 0.5s infinite; }
+        @keyframes blink { 50% { opacity: 0.3; } }
+    </style>
+</head>
+<body>
+    <div class="info">
+        <h2 id="status">SELECT MODE</h2>
+        <div id="scoreBox" class="score-container">
+            <div id="p1Label" class="p1-score">P1: <span id="p1Score">0</span></div>
+            <div id="p2Label" class="p2-score">P2: <span id="p2Score">0</span></div>
+        </div>
+    </div>
+    <canvas id="gameCanvas" width="750" height="700"></canvas>
+    <div id="controlInfo" class="controls">Press [1] for vs AI | Press [2] for 2-Player Co-op</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const p1ScoreEl = document.getElementById('p1Score');
+const p2ScoreEl = document.getElementById('p2Score');
+const statusEl = document.getElementById('status');
+const scoreBox = document.getElementById('scoreBox');
+const controlInfo = document.getElementById('controlInfo');
+
+let gameStarted = false;
+let gameMode = ''; 
+let p1Score = 0, p2Score = 0;
+let isPaused = false, isGameOver = false;
+let deathCause = ''; // 누가 죽었는지 기록
+let animationId;
+
+const stars = [];
+for (let i = 0; i < 150; i++) stars.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, size: Math.random() * 2.5, speed: Math.random() * 3 + 1 });
+
+// 기체 변수 이름을 p1, p2로 통일 (player 변수 제거)
+const p1 = { x: 450, y: 620, w: 46, h: 46, speed: 8, color: '#00D4FF', id: 'P1' };
+const p2 = { x: 250, y: 620, w: 46, h: 46, speed: 7, color: '#00FF41', id: 'P2' };
+
+let bullets = [], enemyBullets = [], enemies = [];
+
+const keys = {};
+document.addEventListener('keydown', (e) => {
+    keys[e.code] = true;
+    if (!gameStarted) {
+        if (e.key === '1') startGame('AI');
+        if (e.key === '2') startGame('COOP');
+    } else {
+        if (e.code === 'KeyP') togglePause();
+        if (e.code === 'KeyR') location.reload();
+    }
+});
+document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+function startGame(mode) {
+    gameMode = mode;
+    gameStarted = true;
+    scoreBox.style.visibility = 'visible';
+    if (mode === 'AI') {
+        p1.id = 'YOU'; p2.id = 'AI'; p2.speed = 5.5;
+        statusEl.innerText = "PLAYER vs AI";
+        controlInfo.innerHTML = "P1: [←][→] & [Space] | [P] Pause | [R] Restart";
+    } else {
+        p1.id = 'P1'; p2.id = 'P2'; p2.speed = 7;
+        statusEl.innerText = "CO-OP MODE";
+        controlInfo.innerHTML = "P1: [←][→], [Space] | P2: [A][D], [L-Shift] | [P] Pause";
+    }
+    loop();
+}
+
+function togglePause() {
+    if (isGameOver) return;
+    isPaused = !isPaused;
+    statusEl.innerText = isPaused ? "PAUSED" : (gameMode === 'AI' ? "PLAYER vs AI" : "CO-OP MODE");
+}
+
+function drawShip(p) {
+    const {x, y, w, h, color, id} = p;
+    ctx.fillStyle = Math.random() > 0.5 ? '#FF4500' : '#FFD700';
+    ctx.fillRect(x + w*0.35, y + h, w*0.3, 10);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x + w/2, y); ctx.lineTo(x + w, y + h*0.8); ctx.lineTo(x + w*0.8, y + h);
+    ctx.lineTo(x + w/2, y + h*0.7); ctx.lineTo(x + w*0.2, y + h); ctx.lineTo(x, y + h*0.8);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 12px Arial';
+    ctx.fillText(id, x + w/2 - 10, y + h + 18);
+}
+
+function drawEnemy(en) {
+    const {x, y, w, h, type} = en;
+    ctx.fillStyle = type === 'small' ? '#FF69B4' : (type === 'medium' ? '#FF8C00' : '#9400D3');
+    ctx.beginPath();
+    if(type === 'small') {
+        ctx.moveTo(x + w/2, y + h); ctx.lineTo(x + w, y); ctx.lineTo(x + w/2, y + h*0.3); ctx.lineTo(x, y);
+    } else {
+        ctx.moveTo(x + w/2, y + h); ctx.lineTo(x + w, y + h*0.5); ctx.lineTo(x + w*0.8, y); ctx.lineTo(x + w/2, y + h*0.2); ctx.lineTo(x + w*0.2, y); ctx.lineTo(x, y + h*0.5);
+    }
+    ctx.closePath(); ctx.fill();
+    if(type !== 'small') drawEyes(en);
+}
+
+function drawEyes(en) {
+    const {x, y, w, h} = en;
+    const targets = [p1, p2];
+    let closest = targets[0];
+    let minDist = Math.hypot(targets[0].x - x, targets[0].y - y);
+    targets.forEach(t => {
+        let d = Math.hypot(t.x - x, t.y - y);
+        if(d < minDist) { minDist = d; closest = t; }
+    });
+    const dx = (closest.x + closest.w/2) - (x + w/2);
+    const dy = (closest.y + closest.h/2) - (y + h/2);
+    const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+
+    [{lx: 0.3, ly: 0.35}, {lx: 0.7, ly: 0.35}].forEach(pos => {
+        const ex = x + w * pos.lx, ey = y + h * pos.ly;
+        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex, ey, w*0.1, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(ex + (dx/dist)*3, ey + (dy/dist)*3, w*0.06, 0, Math.PI*2); ctx.fill();
+    });
+}
+
+function update() {
+    if (isPaused || isGameOver) return;
+    stars.forEach(s => { s.y += s.speed; if(s.y > canvas.height) s.y = 0; });
+
+    // P1 제어
+    if (keys['ArrowLeft'] && p1.x > 0) p1.x -= p1.speed;
+    if (keys['ArrowRight'] && p1.x < canvas.width - p1.w) p1.x += p1.speed;
+    if (keys['Space']) {
+        if (!bullets.some(b => b.owner === 'p1' && b.y > p1.y - 120))
+            bullets.push({ x: p1.x + p1.w/2 - 2, y: p1.y, w: 4, h: 18, color: p1.color, owner: 'p1' });
+    }
+
+    // P2 or AI 제어
+    if (gameMode === 'COOP') {
+        if (keys['KeyA'] && p2.x > 0) p2.x -= p2.speed;
+        if (keys['KeyD'] && p2.x < canvas.width - p2.w) p2.x += p2.speed;
+        if (keys['ShiftLeft'] || keys['ShiftRight']) {
+            if (!bullets.some(b => b.owner === 'p2' && b.y > p2.y - 120))
+                bullets.push({ x: p2.x + p2.w/2 - 2, y: p2.y, w: 4, h: 18, color: p2.color, owner: 'p2' });
+        }
+    } else if (enemies.length > 0) {
+        let target = enemies.reduce((prev, curr) => (prev.y > curr.y) ? prev : curr);
+        if (p2.x + p2.w/2 < target.x + target.w/2 - 5) p2.x += p2.speed;
+        else if (p2.x + p2.w/2 > target.x + target.w/2 + 5) p2.x -= p2.speed;
+        if (Math.abs((p2.x + p2.w/2) - (target.x + target.w/2)) < 25) {
+            if (!bullets.some(b => b.owner === 'p2' && b.y > p2.y - 150))
+                bullets.push({ x: p2.x + p2.w/2 - 2, y: p2.y, w: 4, h: 18, color: p2.color, owner: 'p2' });
+        }
+    }
+
+    bullets.forEach((b, i) => { b.y -= 12; if(b.y < -20) bullets.splice(i, 1); });
+
+    // 적 미사일 충돌 판정 (수정 완료: p1 변수 사용)
+    enemyBullets.forEach((eb, i) => {
+        eb.y += 6; if(eb.y > canvas.height) enemyBullets.splice(i, 1);
+        if(eb.x < p1.x + p1.w && eb.x + eb.w > p1.x && eb.y < p1.y + p1.h && eb.y + eb.h > p1.y) { isGameOver = true; deathCause = 'p1'; }
+        if(eb.x < p2.x + p2.w && eb.x + eb.w > p2.x && eb.y < p2.y + p2.h && eb.y + eb.h > p2.y) { isGameOver = true; deathCause = 'p2'; }
+    });
+
+    if (Math.random() < 0.03) {
+        const roll = Math.random();
+        if (roll < 0.7) enemies.push({ type: 'small', x: Math.random()*(canvas.width-30), y: -30, w: 30, h: 30, speed: 2.2, score: 100, hp: 1 });
+        else if (roll < 0.93) enemies.push({ type: 'medium', x: Math.random()*(canvas.width-50), y: -50, w: 52, h: 52, speed: 1.5, score: 300, hp: 3 });
+        else { enemies.push({ type: 'large', x: Math.random()*(canvas.width-100), y: -100, w: 100, h: 100, speed: 0.8, score: 1200, hp: 15, fireTimer: 0 }); statusEl.classList.add('danger'); }
+    }
+
+    enemies.forEach((en, i) => {
+        en.y += en.speed; en.x += Math.sin(en.y/25) * (en.type === 'small' ? 3 : 1.2);
+        if (en.y > canvas.height) { isGameOver = true; deathCause = 'miss'; }
+        
+        // 기체 충돌 판정 (수정 완료)
+        if(en.y + en.h > p1.y && en.x < p1.x + p1.w && en.x + en.w > p1.x) { isGameOver = true; deathCause = 'p1'; }
+        if(en.y + en.h > p2.y && en.x < p2.x + p2.w && en.x + en.w > p2.x) { isGameOver = true; deathCause = 'p2'; }
+
+        if (en.type === 'large') {
+            en.fireTimer++;
+            if(en.fireTimer > 85) {
+                enemyBullets.push({ x: en.x + en.w*0.2, y: en.y + en.h*0.8, w: 8, h: 20 });
+                enemyBullets.push({ x: en.x + en.w*0.8, y: en.y + en.h*0.8, w: 8, h: 20 });
+                en.fireTimer = 0;
+            }
+        }
+        bullets.forEach((b, bi) => {
+            if(b.x < en.x + en.w && b.x + b.w > en.x && b.y < en.y + en.h && b.y + b.h > en.y) {
+                en.hp--; bullets.splice(bi, 1);
+                if(en.hp <= 0) {
+                    if(en.type === 'large') { statusEl.classList.remove('danger'); statusEl.innerText = gameMode === 'AI' ? "PLAYER vs AI" : "CO-OP MODE"; }
+                    enemies.splice(i, 1);
+                    if(b.owner === 'p1') { p1Score += en.score; p1ScoreEl.innerText = p1Score; }
+                    else { p2Score += en.score; p2ScoreEl.innerText = p2Score; }
+                }
+            }
+        });
+    });
+}
+
+function draw() {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff'; stars.forEach(s => ctx.fillRect(s.x, s.y, s.size, s.size));
+
+    if (!gameStarted) {
+        ctx.fillStyle = '#00D4FF'; ctx.font = 'bold 50px Courier'; ctx.textAlign = 'center';
+        ctx.fillText("GALAGA JS", canvas.width/2, canvas.height/2 - 60);
+        ctx.fillStyle = '#fff'; ctx.font = '25px Courier';
+        ctx.fillText("Press [1] : VS AI", canvas.width/2, canvas.height/2 + 20);
+        ctx.fillText("Press [2] : 2 PLAYER CO-OP", canvas.width/2, canvas.height/2 + 70);
+        return;
+    }
+
+    drawShip(p1); drawShip(p2);
+    bullets.forEach(b => { ctx.fillStyle = b.color; ctx.fillRect(b.x, b.y, b.w, b.h); });
+    ctx.fillStyle = '#FF3E3E'; enemyBullets.forEach(eb => ctx.fillRect(eb.x, eb.y, eb.w, eb.h));
+    enemies.forEach(en => drawEnemy(en));
+
+    if (isGameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 45px Courier'; ctx.textAlign = 'center';
+        
+        let mainMsg = 'MISSION FAILED';
+        let subMsg = '';
+
+        if (gameMode === 'AI') {
+            if (deathCause === 'p2') { mainMsg = 'AI DESTROYED'; subMsg = 'YOU WIN BY SURVIVAL!'; ctx.fillStyle = '#00D4FF'; }
+            else if (deathCause === 'p1') { mainMsg = 'YOU WERE HIT'; subMsg = 'AI WINS BY SURVIVAL!'; ctx.fillStyle = '#00FF41'; }
+            else { subMsg = p1Score > p2Score ? "YOU WIN BY SCORE!" : "AI WINS BY SCORE!"; ctx.fillStyle = '#FFD700'; }
+        } else {
+            subMsg = deathCause === 'miss' ? "ENEMY ESCAPED!" : "SHIP DESTROYED!";
+            ctx.fillStyle = '#FF3E3E';
+        }
+
+        ctx.fillText(mainMsg, canvas.width/2, canvas.height/2 - 40);
+        ctx.font = 'bold 30px Courier';
+        ctx.fillText(subMsg, canvas.width/2, canvas.height/2 + 20);
+        ctx.fillStyle = '#fff'; ctx.font = '20px Courier';
+        ctx.fillText(`P1: ${p1Score} | P2: ${p2Score}`, canvas.width/2, canvas.height/2 + 65);
+        ctx.fillText('Press R to Menu', canvas.width/2, canvas.height/2 + 105);
+    }
+}
+
+function loop() { update(); draw(); animationId = requestAnimationFrame(loop); }
+draw(); 
+</script>
+</body>
+</html>

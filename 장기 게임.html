@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>3D 장기 - 2인 대결 모드</title>
+    <style>
+        :root { --board-bg: #e3a857; --cell-w: 70px; --cell-h: 78px; --line-color: #333; }
+        body { 
+            background: #1a1a1a; display: flex; flex-direction: column; justify-content: center; 
+            align-items: center; height: 100vh; margin: 0; perspective: 1200px; 
+            font-family: '궁서', serif; overflow: hidden; 
+        }
+        
+        /* 헤더 레이아웃: 상태창은 왼쪽, 버튼은 오른쪽 */
+        #header {
+            width: calc(var(--cell-w) * 8 + 120px);
+            display: flex; justify-content: space-between; align-items: flex-end;
+            margin-bottom: 10px; z-index: 2000;
+        }
+        #status-display { color: #fff; font-size: 24px; text-shadow: 2px 2px 4px #000; }
+        .btn-top-restart {
+            padding: 8px 20px; font-size: 16px; font-family: '궁서';
+            background: #4a2e15; color: #e3a857; border: 2px solid #e3a857; border-radius: 5px;
+            cursor: pointer; transition: 0.2s;
+        }
+        .btn-top-restart:hover { background: #e3a857; color: #4a2e15; }
+
+        #board {
+            position: relative; width: calc(var(--cell-w) * 8 + 100px); height: calc(var(--cell-h) * 9 + 100px);
+            background: var(--board-bg); border: 12px solid #4a2e15; border-radius: 5px;
+            transform: rotateX(15deg); box-shadow: 0 40px 80px rgba(0,0,0,0.9);
+            background-image: repeating-linear-gradient(45deg, rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 2px, transparent 2px, transparent 20px);
+        }
+
+        #grid-layer { position: absolute; top: 50px; left: 50px; }
+        .grid-line { position: absolute; background: var(--line-color); opacity: 0.7; }
+        .palace-line { position: absolute; background: var(--line-color); opacity: 0.4; width: 2px; z-index: 1; }
+        
+        .unit { position: absolute; cursor: pointer; z-index: 10; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); transform-style: preserve-3d; }
+        .unit.selected { transform: translateZ(40px) scale(1.1) !important; z-index: 100; }
+        .unit .shape {
+            position: absolute; width: 100%; height: 100%; background: #fdfdfd;
+            clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+            display: flex; justify-content: center; align-items: center; transform: translateZ(8px); border: 1px solid #999;
+        }
+        .unit .thickness {
+            position: absolute; width: 100%; height: 100%; background: #b0a080;
+            clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+            transform: translateZ(0px); filter: drop-shadow(0 6px 4px rgba(0,0,0,0.6));
+        }
+        .unit svg { width: 80%; height: 80%; }
+        .unit.red text { fill: #d32f2f; font-weight: bold; }
+        .unit.green text { fill: #2e7d32; font-weight: bold; }
+
+        .path-dot { position: absolute; width: 24px; height: 24px; background: rgba(255, 235, 0, 0.7); border-radius: 50%; transform: translate(-50%, -50%) translateZ(2px); z-index: 5; cursor: pointer; box-shadow: 0 0 15px #ffeb3b; }
+
+        /* 모달 스타일 */
+        #modal-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); display: none; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 1000; border-radius: 5px;
+        }
+        .modal-content {
+            background: #fff; padding: 40px; border-radius: 10px; text-align: center;
+            border: 5px solid #4a2e15;
+        }
+        .modal-content h1 { font-size: 40px; margin: 0 0 20px 0; }
+    </style>
+</head>
+<body>
+
+<div id="header">
+    <div id="status-display">초(Green)의 차례</div>
+    <button class="btn-top-restart" onclick="location.reload()">새 게임 시작</button>
+</div>
+
+<div id="board">
+    <div id="grid-layer"></div>
+    <div id="units-layer" style="position:absolute; top:50px; left:50px;"></div>
+    <div id="paths-layer" style="position:absolute; top:50px; left:50px;"></div>
+    
+    <div id="modal-overlay">
+        <div class="modal-content">
+            <h1 id="winner-text">승리!</h1>
+            <button class="btn-top-restart" style="background:#4a2e15; color:#fff;" onclick="location.reload()">다시 시작하기</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const W = 70, H = 78;
+let turn = 'green', selectedUnit = null, isGameOver = false;
+let table = Array.from({length: 10}, () => Array(9).fill(null));
+
+const isPalace = (x, y) => (x >= 3 && x <= 5) && ((y >= 0 && y <= 2) || (y >= 7 && y <= 9));
+const UNIT_SIZES = { '漢': 78, '楚': 78, '士': 54, '卒': 54, '兵': 54, 'default': 66 };
+
+class Unit {
+    constructor(t, x, y, team) {
+        this.type = t; this.x = x; this.y = y; this.team = team;
+        this.size = UNIT_SIZES[t] || UNIT_SIZES['default'];
+        this.el = document.createElement('div');
+        this.el.className = `unit ${team}`;
+        this.el.style.width = `${this.size}px`; this.el.style.height = `${this.size}px`;
+        this.render(); this.updatePos();
+        this.el.onclick = (e) => {
+            e.stopPropagation();
+            if (isGameOver) return;
+            if (selectedUnit && selectedUnit.team !== this.team) {
+                if (selectedUnit.getValidMoves().some(m => m[0] === this.x && m[1] === this.y)) {
+                    selectedUnit.move(this.x, this.y); return;
+                }
+            }
+            this.select();
+        };
+        document.getElementById('units-layer').appendChild(this.el);
+        table[y][x] = this;
+    }
+
+    render() {
+        const fontSize = (this.type === '漢' || this.type === '楚') ? 52 : 36;
+        this.el.innerHTML = `<div class="thickness"></div><div class="shape"><svg viewBox="0 0 100 100"><text x="50" y="68" text-anchor="middle" font-size="${fontSize}">${this.type}</text></svg></div>`;
+    }
+
+    updatePos() {
+        this.el.style.left = `${this.x * W - this.size / 2}px`;
+        this.el.style.top = `${this.y * H - this.size / 2}px`;
+    }
+
+    select() {
+        if (turn !== this.team) return;
+        if (selectedUnit) selectedUnit.el.classList.remove('selected');
+        selectedUnit = this;
+        this.el.classList.add('selected');
+        this.showPaths();
+    }
+
+    showPaths() {
+        const layer = document.getElementById('paths-layer'); layer.innerHTML = '';
+        this.getValidMoves().forEach(([nx, ny]) => {
+            const dot = document.createElement('div');
+            dot.className = 'path-dot';
+            dot.style.left = `${nx * W}px`; dot.style.top = `${ny * H}px`;
+            dot.onclick = (e) => { e.stopPropagation(); this.move(nx, ny); };
+            layer.appendChild(dot);
+        });
+    }
+
+    move(nx, ny) {
+        const target = table[ny][nx];
+        if (target && target.team !== this.team) {
+            target.el.style.transform = "translateZ(100px) scale(0)";
+            setTimeout(() => target.el.remove(), 300);
+            if (target.type === '漢' || target.type === '楚') { this.showGameOver(this.team); return; }
+        }
+        table[this.y][this.x] = null; this.x = nx; this.y = ny; table[this.y][this.x] = this;
+        this.updatePos(); this.finishTurn();
+    }
+
+    showGameOver(winnerTeam) {
+        isGameOver = true;
+        const winner = winnerTeam === 'green' ? '초(Green)' : '한(Red)';
+        const winColor = winnerTeam === 'green' ? '#2e7d32' : '#d32f2f';
+        document.getElementById('winner-text').innerText = `${winner} 승리!`;
+        document.getElementById('winner-text').style.color = winColor;
+        document.getElementById('modal-overlay').style.display = 'flex';
+    }
+
+    finishTurn() {
+        if (selectedUnit) selectedUnit.el.classList.remove('selected');
+        selectedUnit = null; document.getElementById('paths-layer').innerHTML = '';
+        turn = (turn === 'green' ? 'red' : 'green');
+        const status = document.getElementById('status-display');
+        status.innerText = `${turn === 'green' ? '초(Green)' : '한(Red)'}의 차례`;
+        status.style.color = turn === 'green' ? '#81c784' : '#ff8a80';
+    }
+
+    getValidMoves() {
+        let moves = [];
+        const {x, y, team, type} = this;
+        const add = (nx, ny) => {
+            if (nx<0||nx>8||ny<0||ny>9) return 'off';
+            const t = table[ny][nx];
+            if (!t) { moves.push([nx, ny]); return 'empty'; }
+            if (t.team !== team) { moves.push([nx, ny]); return 'enemy'; }
+            return 'friend';
+        };
+        const pMove = (tx, ty, diag) => {
+            if (!isPalace(tx, ty)) return;
+            if (diag) {
+                const center = (tx === 4 && (ty === 1 || ty === 8));
+                const corner = (tx !== 4 && (ty % 7 !== 1));
+                if (!center && !corner) return;
+            }
+            add(tx, ty);
+        };
+        switch (type) {
+            case '漢': case '楚': case '士':
+                [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy]) => pMove(x+dx, y+dy, false));
+                if ((x===3||x===5||x===4) && (y%7===0||y%7===1||y%7===2)) {
+                    [[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dx,dy]) => {
+                        if (x===4 && (y===1||y===8)) pMove(x+dx, y+dy, true);
+                        else if (x+dx===4 && (y+dy===1||y+dy===8)) pMove(x+dx, y+dy, true);
+                    });
+                }
+                break;
+            case '車':
+                [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy]) => {
+                    let nx=x+dx, ny=y+dy;
+                    while(nx>=0&&nx<9&&ny>=0&&ny<10) { let res = add(nx, ny); if(res !== 'empty') break; nx+=dx; ny+=dy; }
+                });
+                if (isPalace(x,y)) {
+                    [[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dx,dy]) => {
+                        let nx=x+dx, ny=y+dy;
+                        while(isPalace(nx,ny)) {
+                            if (x===4||nx===4||(Math.abs(x-nx)===2)) {
+                                let res = add(nx, ny); if(res !== 'empty') break;
+                                nx+=dx; ny+=dy;
+                            } else break;
+                        }
+                    });
+                }
+                break;
+            case '包':
+                [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy]) => {
+                    let nx=x+dx, ny=y+dy, bridge=false;
+                    while(nx>=0&&nx<9&&ny>=0&&ny<10) {
+                        const t = table[ny][nx];
+                        if(!bridge) { if(t) { if(t.type==='包') break; bridge=true; } }
+                        else { if(!t) moves.push([nx,ny]); else { if(t.team!==team && t.type!=='包') moves.push([nx,ny]); break; } }
+                        nx+=dx; ny+=dy;
+                    }
+                });
+                break;
+            case '馬':
+                [[0,-1,-1,-2],[0,-1,1,-2],[0,1,-1,2],[0,1,1,2],[-1,0,-2,-1],[-1,0,-2,1],[1,0,2,-1],[1,0,2,1]].forEach(m => {
+                    if(!table[y+m[1]]?.[x+m[0]]) add(x+m[2], y+m[3]);
+                });
+                break;
+            case '象':
+                [[0,-1,-1,-2,-2,-3],[0,-1,1,-2,2,-3],[0,1,-1,2,-2,3],[0,1,1,2,2,3],[-1,0,-2,-1,-3,-2],[-1,0,-2,1,-3,2],[1,0,2,-1,3,-2],[1,0,2,1,3,2]].forEach(m => {
+                    if(!table[y+m[1]]?.[x+m[0]] && !table[y+m[3]]?.[x+m[2]]) add(x+m[4], y+m[5]);
+                });
+                break;
+            case '卒': case '兵':
+                const f = team === 'green' ? -1 : 1;
+                add(x, y+f); add(x-1, y); add(x+1, y);
+                if (isPalace(x,y) && ((team==='green'&&y<=2)||(team==='red'&&y>=7))) {
+                    [[1,f],[-1,f]].forEach(([dx,dy]) => { if (isPalace(x+dx, y+dy) && (x===4 || (x+dx===4))) add(x+dx, y+dy); });
+                }
+                break;
+        }
+        return moves;
+    }
+}
+
+function init() {
+    const layer = document.getElementById('grid-layer');
+    for(let i=0; i<9; i++) layer.innerHTML += `<div class="grid-line" style="left:${i*W}px; top:0; height:${9*H}px; width:1px;"></div>`;
+    for(let i=0; i<10; i++) layer.innerHTML += `<div class="grid-line" style="top:${i*H}px; left:0; width:${8*W}px; height:1px;"></div>`;
+    const drawX = (cx, cy) => {
+        layer.innerHTML += `<div class='palace-line' style='width:105px; transform:rotate(48deg); left:${(cx-1)*W}px; top:${cy*H}px; transform-origin:0 0;'></div>`;
+        layer.innerHTML += `<div class='palace-line' style='width:105px; transform:rotate(-48deg); left:${(cx-1)*W}px; top:${(cy+2)*H}px; transform-origin:0 0;'></div>`;
+    }
+    drawX(4, 0); drawX(4, 7);
+    const layout = [['車',0,0,'red'],['馬',1,0,'red'],['象',2,0,'red'],['士',3,0,'red'],['士',5,0,'red'],['象',6,0,'red'],['馬',7,0,'red'],['車',8,0,'red'],['漢',4,1,'red'],['包',1,2,'red'],['包',7,2,'red'],['兵',0,3,'red'],['兵',2,3,'red'],['兵',4,3,'red'],['兵',6,3,'red'],['兵',8,3,'red'],['卒',0,6,'green'],['卒',2,6,'green'],['卒',4,6,'green'],['卒',6,6,'green'],['卒',8,6,'green'],['包',1,7,'green'],['包',7,7,'green'],['楚',4,8,'green'],['車',0,9,'green'],['馬',1,9,'green'],['象',2,9,'green'],['士',3,9,'green'],['士',5,9,'green'],['象',6,9,'green'],['馬',7,9,'green'],['車',8,9,'green']];
+    layout.forEach(p => new Unit(...p));
+}
+init();
+</script>
+</body>
+</html>

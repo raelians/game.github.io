@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>고급 고스톱 Master Pro</title>
+  <style>
+    :root {
+      --bg-color: #1a472a;
+      --panel-bg: #ffffff;
+      --accent-color: #ffc107;
+      --red-color: #dc3545;
+      --overlay-bg: rgba(0, 0, 0, 0.92);
+      --reset-color: #6c757d;
+    }
+    body {
+      margin: 0; font-family: 'Pretendard', sans-serif;
+      background-color: #0d2616; color: white;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 100vh; overflow: hidden;
+    }
+
+    .status-panel {
+      margin-bottom: 20px; display: flex; align-items: center; gap: 15px;
+      background: var(--panel-bg); padding: 12px 40px; border-radius: 50px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3); color: #333; font-weight: bold;
+    }
+
+    .game-board {
+      position: relative; width: 900px; height: 600px;
+      background-color: var(--bg-color);
+      border: 10px solid #5d4037; border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      display: flex; flex-direction: column; justify-content: space-between; padding: 25px;
+    }
+
+    .area { display: flex; justify-content: center; gap: 12px; min-height: 110px; border-radius: 10px; padding: 10px; }
+    .hand { background: rgba(0,0,0,0.25); border: 2px dashed rgba(255,255,255,0.1); }
+    .floor { flex-wrap: wrap; align-content: center; background: rgba(255,255,255,0.05); min-height: 180px; }
+
+    .card {
+      width: 55px; height: 88px; background: #fff;
+      border: 2px solid #000; border-radius: 6px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      cursor: pointer; transition: 0.2s; position: relative; color: #333;
+      box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+    }
+    .card:hover { transform: translateY(-15px) scale(1.05); z-index: 10; }
+    .card .month { font-size: 14px; font-weight: 900; margin-bottom: 5px; }
+    .card .symbol { font-size: 20px; }
+    .card.back { background: var(--red-color); border-color: white; color: transparent; cursor: default; }
+    .card.back::after { content: '🎴'; color: rgba(255,255,255,0.3); font-size: 24px; display: flex; align-items: center; justify-content: center; height: 100%; }
+
+    .score-badge {
+      position: absolute; right: 20px; width: 130px; background: rgba(0,0,0,0.6);
+      padding: 15px; border-radius: 12px; font-size: 14px; border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .overlay {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      background: var(--overlay-bg); display: none; flex-direction: column;
+      align-items: center; justify-content: center; z-index: 300;
+      backdrop-filter: blur(10px); border-radius: 12px; text-align: center;
+    }
+
+    button {
+      padding: 15px 40px; font-size: 18px; font-weight: bold;
+      border: none; border-radius: 10px; cursor: pointer; transition: 0.3s;
+    }
+    .btn-main { background: var(--red-color); color: white; width: 220px; margin: 10px; }
+    .btn-sub { background: white; color: black; width: 220px; margin: 10px; }
+    .btn-reset { background: var(--reset-color); color: white; min-width: 150px; margin-top: 25px; }
+    
+    #particles-js { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; }
+  </style>
+</head>
+<body>
+
+  <div class="status-panel">
+    <div id="turn-indicator" style="width:15px; height:15px; border-radius:50%; background:var(--red-color);"></div>
+    <span id="status-text">환영합니다! 모드를 선택하세요</span>
+  </div>
+
+  <div class="game-board">
+    <div id="opp-hand" class="area hand"></div>
+    <div id="floor" class="area floor"></div>
+    <div id="my-hand" class="area hand"></div>
+
+    <div class="score-badge" style="top: 25px;">
+      <div style="color:var(--accent-color)">상대 점수</div>
+      <div id="opp-score" style="font-size:24px; font-weight:bold;">0</div>
+    </div>
+    <div class="score-badge" style="bottom: 25px;">
+      <div style="color:var(--accent-color)">나의 점수</div>
+      <div id="my-score" style="font-size:24px; font-weight:bold;">0</div>
+    </div>
+
+    <div id="start-overlay" class="overlay" style="display:flex;">
+      <h1 style="font-size:48px; margin-bottom:10px; letter-spacing:5px; color:var(--accent-color);">MASTER GO-STOP</h1>
+      <p style="color:#aaa; margin-bottom:40px;">정통 고스톱 대결을 시작합니다</p>
+      <div style="display:flex; flex-direction:column;">
+        <button class="btn-main" onclick="initGame('ai')">AI와 대결</button>
+        <button class="btn-sub" onclick="initGame('pvp')">친구와 대결 (2P)</button>
+      </div>
+    </div>
+
+    <div id="go-stop-modal" class="overlay">
+      <h1 style="color:var(--red-color); font-size:48px; margin-bottom:10px;">난이도 발생!</h1>
+      <p id="gs-msg" style="font-size:20px; margin-bottom:30px;">7점을 달성했습니다. 더 가시겠습니까?</p>
+      <button class="btn-main" onclick="handleGoStop('go')">고! (GO)</button>
+      <button class="btn-sub" onclick="handleGoStop('stop')">스톱! (STOP)</button>
+    </div>
+
+    <div id="confirm-modal" class="overlay">
+      <h1 style="font-size:32px; margin-bottom:20px;">판을 새로 깔까요?</h1>
+      <p style="color:#ccc; margin-bottom:30px;">진행 중인 모든 기록이 초기화됩니다.</p>
+      <div style="display:flex;">
+        <button class="btn-main" onclick="location.reload()">새 게임 시작</button>
+        <button class="btn-sub" onclick="hideConfirm()">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <button class="btn-reset" onclick="showConfirm()">게임 초기화 / 재시작</button>
+
+  <div id="particles-js"></div>
+  <script src="https://cdn.jsdelivr.net/npm/particles.js@2.0.0/particles.min.js"></script>
+
+  <script>
+    const symbols = ["", "🌸", "🌿", "🍒", "🍀", "🎋", "🌹", "🌿", "🌙", "🌾", "🍁", "🌲", "🏮"];
+    let myHand = [], oppHand = [], floor = [], deck = [];
+    let myScore = 0, oppScore = 0, gameMode = 'ai', isMyTurn = true, gameEnded = false;
+
+    function initGame(mode) {
+      gameMode = mode;
+      document.getElementById('start-overlay').style.display = 'none';
+      gameEnded = false;
+      myScore = 0; oppScore = 0;
+      isMyTurn = true;
+      
+      deck = [];
+      for(let m=1; m<=12; m++) {
+        for(let i=0; i<4; i++) deck.push({ month: m, id: `${m}-${i}`, symbol: symbols[m] });
+      }
+      deck.sort(() => Math.random() - 0.5);
+
+      myHand = deck.splice(0, 10);
+      oppHand = deck.splice(0, 10);
+      floor = deck.splice(0, 8);
+      
+      render();
+      updateStatus("나의 차례입니다. 패를 선택하세요.");
+    }
+
+    function render() {
+      const myArea = document.getElementById('my-hand');
+      const oppArea = document.getElementById('opp-hand');
+      const floorArea = document.getElementById('floor');
+
+      myArea.innerHTML = '';
+      myHand.forEach(card => {
+        const el = createCardUI(card, false);
+        el.onclick = () => playTurn(card);
+        myArea.appendChild(el);
+      });
+
+      oppArea.innerHTML = '';
+      oppHand.forEach(card => {
+        const el = createCardUI(card, gameMode === 'ai');
+        if(gameMode === 'pvp') el.onclick = () => playTurn(card);
+        oppArea.appendChild(el);
+      });
+
+      floorArea.innerHTML = '';
+      floor.forEach(card => floorArea.appendChild(createCardUI(card, false)));
+
+      document.getElementById('my-score').innerText = myScore;
+      document.getElementById('opp-score').innerText = oppScore;
+    }
+
+    function createCardUI(card, isBack) {
+      const el = document.createElement('div');
+      el.className = isBack ? 'card back' : 'card';
+      if(!isBack) {
+        el.innerHTML = `<span class="month">${card.month}월</span><span class="symbol">${card.symbol}</span>`;
+      }
+      return el;
+    }
+
+    function playTurn(card) {
+      if(gameEnded) return;
+      
+      const matchIdx = floor.findIndex(f => f.month === card.month);
+
+      if(isMyTurn) myHand = myHand.filter(c => c.id !== card.id);
+      else oppHand = oppHand.filter(c => c.id !== card.id);
+
+      if(matchIdx !== -1) {
+        floor.splice(matchIdx, 1);
+        if(isMyTurn) myScore += 3; else oppScore += 3; // 맞췄을 때 점수
+      } else {
+        floor.push(card);
+      }
+
+      // 점수 달성 시 고/스톱 판단 (최종 점수와 겹치지 않게 우선순위)
+      if((isMyTurn ? myScore : oppScore) >= 7 && !gameEnded) {
+        document.getElementById('go-stop-modal').style.display = 'flex';
+        return;
+      }
+      
+      checkFinish();
+    }
+
+    function checkFinish() {
+      // 양쪽 패가 모두 소진되었는지 확인
+      if(myHand.length === 0 && oppHand.length === 0) {
+        const winnerText = myScore > oppScore ? "나의 승리!" : (myScore < oppScore ? "상대방 승리!" : "무승부!");
+        endGame(winnerText);
+      } else {
+        nextTurn();
+      }
+    }
+
+    function nextTurn() {
+      isMyTurn = !isMyTurn;
+      render();
+      updateStatus(isMyTurn ? "나의 차례입니다." : "상대방 차례입니다.");
+      if(gameMode === 'ai' && !isMyTurn) setTimeout(aiThink, 800);
+    }
+
+    function aiThink() {
+      if(oppHand.length === 0) return;
+      let bestCard = oppHand[0];
+      for(let c of oppHand) { if(floor.some(f => f.month === c.month)) { bestCard = c; break; } }
+      playTurn(bestCard);
+    }
+
+    function handleGoStop(choice) {
+      document.getElementById('go-stop-modal').style.display = 'none';
+      if(choice === 'go') {
+        if(isMyTurn) myScore += 2; else oppScore += 2; // 고 하면 추가점수
+        updateStatus((isMyTurn ? "나" : "상대") + "가 '고'를 외쳤습니다!");
+        checkFinish();
+      } else {
+        endGame((isMyTurn ? "플레이어" : "상대방") + " 승리! (STOP)");
+      }
+    }
+
+    function showConfirm() { document.getElementById('confirm-modal').style.display = 'flex'; }
+    function hideConfirm() { document.getElementById('confirm-modal').style.display = 'none'; }
+
+    function updateStatus(msg) {
+      document.getElementById('status-text').innerText = msg;
+      document.getElementById('turn-indicator').style.background = isMyTurn ? 'var(--red-color)' : '#999';
+    }
+
+    function endGame(winner) {
+      gameEnded = true;
+      render();
+      const overlay = document.getElementById('start-overlay');
+      overlay.style.display = 'flex';
+      overlay.innerHTML = `<h1 style="font-size:48px; color:var(--accent-color);">${winner}</h1>
+                           <p style="margin-bottom:20px; font-size:20px;">최종 점수 [ 나: ${myScore} vs 상대: ${oppScore} ]</p>
+                           <button class="btn-main" onclick="location.reload()">새 게임 시작하기</button>`;
+      
+      if(winner.includes("나") || winner.includes("플레이어")) {
+        particlesJS("particles-js", {
+          "particles":{"number":{"value":150},"color":{"value":"#ffc107"},"move":{"speed":7}}
+        });
+      }
+    }
+  </script>
+</body>
+</html>
